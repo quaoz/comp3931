@@ -1,0 +1,9 @@
+[package]
+name = "comp3931"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+
+[dependencies]
+anyhow = "1.0.100"
+rand = "0.9.2"
