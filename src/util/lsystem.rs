@@ -15,12 +15,22 @@ pub trait Symbol: PartialEq + Copy + Clone {
 ///
 /// - `Normal(head, rhs)`
 /// - `Stochastic(head, prob, rhs)`
+/// - `Parametric(head, f)`
 pub enum Rule<'a, S: Symbol> {
     Normal(S, &'a [S]),
     Stochastic(S, f32, &'a [S]),
+    Parametric(S, &'a dyn Fn(&S, &mut Vec<S>) -> bool),
 }
 
 impl<S: Symbol> Rule<'_, S> {
+    fn priority(&self) -> u8 {
+        match self {
+            Rule::Parametric(..) => 1,
+            Rule::Stochastic(..) => 2,
+            Rule::Normal(..) => 3,
+        }
+    }
+
     /// Attempts to apply this rule to the symbol at `index` in `input`. On match,
     /// appends the production to `out` and returns `true`
     pub fn apply(&self, index: usize, input: &[S], out: &mut Vec<S>) -> bool {
@@ -31,6 +41,7 @@ impl<S: Symbol> Rule<'_, S> {
         }
 
         match self {
+            Rule::Parametric(head, func) if symbol == *head => func(&symbol, out),
             Rule::Stochastic(head, prob, res) if symbol == *head && random_bool(*prob as f64) => {
                 out.extend(*res);
                 true
@@ -51,7 +62,8 @@ pub struct LSystem<'a, S: Symbol> {
 
 impl<'a, S: Symbol> LSystem<'a, S> {
     /// Construct an L-system from an axiom and set of rules
-    pub fn new(axiom: &[S], rules: Vec<Rule<'a, S>>) -> Self {
+    pub fn new(axiom: &[S], mut rules: Vec<Rule<'a, S>>) -> Self {
+        rules.sort_by_key(|r| r.priority());
         Self {
             state: axiom.to_vec(),
             rules,
