@@ -1,65 +1,18 @@
-use std::fmt::Display;
-
-use crate::util::lsystem::{LSystem, Rule, Symbol, SymbolType};
-
+mod app;
+mod framework;
+mod turtle;
 mod util;
 
-#[derive(Debug, Copy, Clone)]
-enum TestSymbols {
-    A,
-    B,
-}
+use winit::event_loop::EventLoop;
 
-impl Display for TestSymbols {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::A => write!(f, "A"),
-            Self::B => write!(f, "B"),
-        }
-    }
-}
-
-impl PartialEq for TestSymbols {
-    fn eq(&self, other: &Self) -> bool {
-        std::mem::discriminant(self) == std::mem::discriminant(other)
-    }
-}
-
-impl Symbol for TestSymbols {
-    fn symbol_type(&self) -> SymbolType {
-        SymbolType::NonTerminal
-    }
-}
-
-fn ts_str(syms: &[TestSymbols]) -> String {
-    syms.iter()
-        .map(|s| format!("{s}"))
-        .collect::<Vec<_>>()
-        .join("")
-}
+use crate::{app::App, turtle::renderer::TurtleRenderer};
 
 fn main() -> anyhow::Result<()> {
-    let mut ls = LSystem::new(&[TestSymbols::A], vec![
-        Rule::Normal(TestSymbols::A, &[TestSymbols::A, TestSymbols::B]),
-        Rule::Normal(TestSymbols::B, &[TestSymbols::A]),
-    ]);
-    let expected = [
-        "A",
-        "AB",
-        "ABA",
-        "ABAAB",
-        "ABAABABA",
-        "ABAABABAABAAB",
-        "ABAABABAABAABABAABABA",
-        "ABAABABAABAABABAABABAABAABABAABAAB",
-    ];
+    env_logger::init();
 
-    for exp in expected {
-        let s = ts_str(ls.current());
-        println!("{s}");
-        assert_eq!(s, exp);
-        ls.step();
-    }
+    let event_loop = EventLoop::with_user_event().build()?;
+    let mut app = App::<TurtleRenderer>::new(&event_loop);
+    event_loop.run_app(&mut app)?;
 
     Ok(())
 }
