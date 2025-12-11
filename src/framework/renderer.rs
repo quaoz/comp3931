@@ -11,6 +11,7 @@ pub trait Renderer: 'static + Sized + Send + Debug {
     fn resize(&mut self, display: &Display);
     fn update(&mut self, display: &Display, dt: Duration);
     fn render(&mut self, display: &mut Display);
+
     #[allow(unused)]
     fn handle_keyboard(&mut self, key: KeyCode, pressed: bool) {}
     #[allow(unused)]

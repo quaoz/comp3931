@@ -2,7 +2,7 @@ use std::{f32::consts::PI, time::Duration};
 
 use glam::{Mat4, vec3};
 use wgpu::{
-    BindGroup, Buffer, RenderPipeline,
+    BindGroup, Buffer, BufferDescriptor, BufferUsages, RenderPipeline, VertexBufferLayout,
     util::{BufferInitDescriptor, DeviceExt},
 };
 use winit::keyboard::KeyCode;
@@ -16,16 +16,20 @@ use crate::{
     turtle::scenes::SceneController,
 };
 
-const MAX_LINES: u64 = 1000000;
-const LINE_SIZE: u64 = 4 * 3 * 3;
-const LINE_LAYOUT: wgpu::VertexBufferLayout<'static> = wgpu::VertexBufferLayout {
-    array_stride: LINE_SIZE,
-    step_mode: wgpu::VertexStepMode::Instance,
-    attributes: &wgpu::vertex_attr_array![
-        0 => Float32x3,
-        1 => Float32x3,
-        2 => Float32x3,
-    ],
+const MAX_VERTICES: u64 = 20_000_000;
+const VERTEX_SIZE: u64 = 4 * 3;
+const COLOR_SIZE: u64 = 4 * 3;
+
+const VERTEX_LAYOUT: VertexBufferLayout<'static> = VertexBufferLayout {
+    array_stride: VERTEX_SIZE,
+    step_mode: wgpu::VertexStepMode::Vertex,
+    attributes: &wgpu::vertex_attr_array![0 => Float32x3],
+};
+
+const COLOR_LAYOUT: VertexBufferLayout<'static> = VertexBufferLayout {
+    array_stride: COLOR_SIZE,
+    step_mode: wgpu::VertexStepMode::Vertex,
+    attributes: &wgpu::vertex_attr_array![1 => Float32x3],
 };
 
 #[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -45,8 +49,10 @@ pub struct TurtleRenderer {
     uniforms_bind_group: BindGroup,
     uniforms_dirty: bool,
 
-    lines_buffer: Buffer,
-    lines_count: u32,
+    vertex_buffer: Buffer,
+    color_buffer: Buffer,
+    index_buffer: Buffer,
+    line_segments: Vec<(u32, u32)>,
     draw_lines: RenderPipeline,
 
     scene_controller: SceneController,
@@ -59,13 +65,13 @@ impl Renderer for TurtleRenderer {
             .create_shader_module(wgpu::include_wgsl!("lines.wgsl"));
 
         let camera = Camera::new(vec3(0.0, 0.0, -50.0), std::f32::consts::FRAC_PI_2, 0.0);
-        let camera_controller = CameraController::new(10.0, 0.001);
+        let camera_controller = CameraController::new(25.0, 0.001);
         let projection = Projection::new(
             display.config.width,
             display.config.height,
             PI * 0.25,
             0.1,
-            1000.0,
+            5000.0,
         );
 
         let uniforms = Uniforms {
@@ -74,7 +80,7 @@ impl Renderer for TurtleRenderer {
         let uniform_buffer = display.device.create_buffer_init(&BufferInitDescriptor {
             label: Some("uniform_buffer"),
             contents: bytemuck::bytes_of(&uniforms),
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::UNIFORM,
+            usage: BufferUsages::COPY_DST | BufferUsages::UNIFORM,
         });
 
         let uniforms_bind_group_layout =
@@ -105,12 +111,24 @@ impl Renderer for TurtleRenderer {
                 }],
             });
 
-        let lines_buffer = display.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Line Buffer"),
-            size: LINE_SIZE * MAX_LINES,
-            usage: wgpu::BufferUsages::VERTEX
-                | wgpu::BufferUsages::COPY_DST
-                | wgpu::BufferUsages::STORAGE,
+        let vertex_buffer = display.device.create_buffer(&BufferDescriptor {
+            label: Some("Vertex Buffer"),
+            size: VERTEX_SIZE * MAX_VERTICES,
+            usage: BufferUsages::VERTEX | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        let color_buffer = display.device.create_buffer(&BufferDescriptor {
+            label: Some("Color Buffer"),
+            size: COLOR_SIZE * MAX_VERTICES,
+            usage: BufferUsages::VERTEX | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        let index_buffer = display.device.create_buffer(&BufferDescriptor {
+            label: Some("Index Buffer"),
+            size: 4 * MAX_VERTICES,
+            usage: BufferUsages::INDEX | BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
 
@@ -131,11 +149,11 @@ impl Renderer for TurtleRenderer {
                 vertex: wgpu::VertexState {
                     module: &shader,
                     entry_point: Some("vs_main"),
-                    buffers: &[LINE_LAYOUT],
+                    buffers: &[VERTEX_LAYOUT, COLOR_LAYOUT],
                     compilation_options: Default::default(),
                 },
                 primitive: wgpu::PrimitiveState {
-                    topology: wgpu::PrimitiveTopology::LineList,
+                    topology: wgpu::PrimitiveTopology::LineStrip,
                     ..Default::default()
                 },
                 depth_stencil: None,
@@ -155,6 +173,7 @@ impl Renderer for TurtleRenderer {
             });
 
         let scene_controller = SceneController::new();
+        let line_segments = Vec::new();
 
         Ok(Self {
             camera,
@@ -166,8 +185,10 @@ impl Renderer for TurtleRenderer {
             uniforms_bind_group,
             uniforms_dirty: true,
 
-            lines_buffer,
-            lines_count: 0,
+            vertex_buffer,
+            color_buffer,
+            index_buffer,
+            line_segments,
             draw_lines,
 
             scene_controller,
@@ -205,9 +226,12 @@ impl Renderer for TurtleRenderer {
                 .write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&self.uniforms));
         }
 
-        self.lines_count = self
-            .scene_controller
-            .set_scene(&display.queue, &self.lines_buffer);
+        self.line_segments = self.scene_controller.set_scene(
+            &display.queue,
+            &self.vertex_buffer,
+            &self.color_buffer,
+            &self.index_buffer,
+        );
     }
 
     fn render(&mut self, display: &mut Display) {
@@ -239,8 +263,13 @@ impl Renderer for TurtleRenderer {
 
         draw_pass.set_pipeline(&self.draw_lines);
         draw_pass.set_bind_group(0, &self.uniforms_bind_group, &[]);
-        draw_pass.set_vertex_buffer(0, self.lines_buffer.slice(..));
-        draw_pass.draw(0..2, 0..self.lines_count);
+        draw_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+        draw_pass.set_vertex_buffer(1, self.color_buffer.slice(..));
+        draw_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+
+        for (start_index, count) in &self.line_segments {
+            draw_pass.draw_indexed(*start_index..(*start_index + *count), 0, 0..1);
+        }
 
         drop(draw_pass);
 

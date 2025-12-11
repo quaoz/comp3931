@@ -53,19 +53,18 @@
 
           craneLib = (inputs.crane.mkLib pkgs).overrideToolchain toolchain;
 
-          commonArgs = {
-            src = let
-              root = ./.;
-            in
-              lib.fileset.toSource {
-                inherit root;
-
-                fileset = lib.fileset.unions [
-                  (craneLib.fileset.commonCargoSources root)
-                  (lib.fileset.fileFilter (file: file.hasExt "wgsl") root)
-                ];
-              };
+          commonArgs = let
+            root = ./.;
+          in {
             strictDeps = true;
+
+            src = lib.fileset.toSource {
+              inherit root;
+              fileset = lib.fileset.unions [
+                (craneLib.fileset.commonCargoSources root)
+                (lib.fileset.fileFilter (file: file.hasExt "wgsl") root)
+              ];
+            };
           };
 
           cargoArtifacts = craneLib.buildDepsOnly commonArgs;
@@ -74,15 +73,36 @@
       );
   in {
     packages = forAllSystems ({
+      pkgs,
       system,
       craneLib,
       commonArgs,
       cargoArtifacts,
       ...
     }: let
+      libs = with pkgs;
+        lib.makeLibraryPath [
+          libxkbcommon
+          vulkan-loader
+          libGL
+          wayland
+          xorg.libX11
+          xorg.libXi
+          xorg.libXtst
+          xorg.libXcursor
+        ];
+
       package = craneLib.buildPackage (commonArgs
         // {
           inherit cargoArtifacts;
+
+          nativeBuildInputs = lib.optionals pkgs.stdenv.isLinux [
+            pkgs.makeWrapper
+          ];
+
+          postInstall = lib.optionalString pkgs.stdenv.isLinux ''
+            wrapProgram $out/bin/comp3931 --set LD_LIBRARY_PATH ${libs}
+          '';
         });
     in {
       default = package // {meta.mainProgram = package.pname;};

@@ -6,8 +6,8 @@ use winit::{
     application::ApplicationHandler,
     event::{DeviceEvent, DeviceId, WindowEvent},
     event_loop::{ActiveEventLoop, EventLoop, EventLoopProxy},
-    keyboard::PhysicalKey,
-    window::Window,
+    keyboard::{KeyCode, PhysicalKey},
+    window::{CursorGrabMode, Window},
 };
 
 use crate::framework::{display::Display, renderer::Renderer};
@@ -16,6 +16,7 @@ pub struct App<R: Renderer> {
     ctx: Option<(Display, R)>,
     proxy: Option<EventLoopProxy<Result<(Display, R)>>>,
     last_time: Instant,
+    cursor_grabbed: bool,
 }
 
 impl<R: Renderer + 'static> App<R> {
@@ -24,15 +25,39 @@ impl<R: Renderer + 'static> App<R> {
             ctx: None,
             proxy: Some(event_loop.create_proxy()),
             last_time: Instant::now(),
+            cursor_grabbed: true,
+        }
+    }
+
+    fn set_cursor_grab(&mut self, grabbed: bool) {
+        if let Some((display, _)) = &self.ctx {
+            self.cursor_grabbed = grabbed;
+
+            if grabbed {
+                display
+                    .window
+                    .set_cursor_grab(CursorGrabMode::Confined)
+                    .or_else(|_| display.window.set_cursor_grab(CursorGrabMode::Locked))
+                    .unwrap();
+                display.window.set_cursor_visible(false);
+            } else {
+                display
+                    .window
+                    .set_cursor_grab(CursorGrabMode::None)
+                    .unwrap();
+                display.window.set_cursor_visible(true);
+            }
         }
     }
 }
 
 impl<R: Renderer> ApplicationHandler<Result<(Display, R)>> for App<R> {
     fn resumed(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
-        #[allow(unused_mut)]
-        let mut window_attributes = Window::default_attributes();
-        let window = Arc::new(event_loop.create_window(window_attributes).unwrap());
+        let window = Arc::new(
+            event_loop
+                .create_window(Window::default_attributes())
+                .unwrap(),
+        );
 
         if let Some(proxy) = self.proxy.take() {
             let display_future = Display::new(window.clone());
@@ -56,6 +81,8 @@ impl<R: Renderer> ApplicationHandler<Result<(Display, R)>> for App<R> {
 
         self.ctx = Some((display, renderer));
         self.last_time = Instant::now();
+
+        self.set_cursor_grab(true);
     }
 
     fn device_event(
@@ -95,7 +122,16 @@ impl<R: Renderer> ApplicationHandler<Result<(Display, R)>> for App<R> {
                 }
                 WindowEvent::KeyboardInput { event, .. } => {
                     if let PhysicalKey::Code(code) = event.physical_key {
-                        renderer.handle_keyboard(code, event.state.is_pressed());
+                        if code == KeyCode::Escape && event.state.is_pressed() {
+                            self.set_cursor_grab(!self.cursor_grabbed);
+                        } else {
+                            renderer.handle_keyboard(code, event.state.is_pressed());
+                        }
+                    }
+                }
+                WindowEvent::Focused(focused) => {
+                    if focused && self.cursor_grabbed {
+                        self.set_cursor_grab(true);
                     }
                 }
                 WindowEvent::RedrawRequested => {

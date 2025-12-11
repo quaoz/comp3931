@@ -7,7 +7,7 @@ const SAFE_FRAC_PI_2: f32 = FRAC_PI_2 - 0.0001;
 
 #[derive(Debug)]
 pub struct Camera {
-    pub position: Vec3,
+    position: Vec3,
     yaw: f32,
     pitch: f32,
 }
@@ -139,37 +139,29 @@ impl CameraController {
     pub fn update_camera(&mut self, camera: &mut Camera, dt: Duration) {
         let dt = dt.as_secs_f32();
 
-        // Move forward/backward and left/right
+        // handle left/right/forwards/backwards movement
         let (yaw_sin, yaw_cos) = camera.yaw.sin_cos();
         let forward = Vec3::new(yaw_cos, 0.0, yaw_sin).normalize();
         let right = Vec3::new(-yaw_sin, 0.0, yaw_cos).normalize();
         camera.position += forward * (self.amount_forward - self.amount_backward) * self.speed * dt;
         camera.position += right * (self.amount_right - self.amount_left) * self.speed * dt;
 
-        // Move in/out (aka. "zoom")
-        // Note: this isn't an actual zoom. The camera's position
-        // changes when zooming. I've added this to make it easier
-        // to get closer to an object you want to focus on.
+        // move forwards/backwards when scrolling (fake zoom)
         let (pitch_sin, pitch_cos) = camera.pitch.sin_cos();
         let scrollward = Vec3::new(pitch_cos * yaw_cos, pitch_sin, pitch_cos * yaw_sin).normalize();
         camera.position += scrollward * self.scroll * self.speed * self.sensitivity * dt;
         self.scroll = 0.0;
 
-        // Move up/down. Since we don't use roll, we can just
-        // modify the y coordinate directly.
+        // handle up.down movement
         camera.position.y += (self.amount_up - self.amount_down) * self.speed * dt;
 
-        // Rotate
+        // handle rotation
         camera.yaw += self.rotate_horizontal * self.sensitivity;
         camera.pitch += -self.rotate_vertical * self.sensitivity;
-
-        // If process_mouse isn't called every frame, these values
-        // will not get set to zero, and the camera will rotate
-        // when moving in a non cardinal direction.
         self.rotate_horizontal = 0.0;
         self.rotate_vertical = 0.0;
 
-        // Keep the camera's angle from going too high/low.
+        // prevent pitch from going too high/low
         camera.pitch = camera.pitch.clamp(-SAFE_FRAC_PI_2, SAFE_FRAC_PI_2);
     }
 }

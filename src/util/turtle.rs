@@ -8,29 +8,24 @@ pub enum Action {
     Colour(Vec3),
     Push,
     Pop,
+    Nop,
 }
 
 #[derive(Debug)]
 pub struct Turtle {
+    scale: f32,
     heading: Vec3,
     normal: Vec3,
     stack: Vec<(usize, Vec3, Vec3)>,
-    pub path_buf: Vec<Vec3>,
-    pub colour_buf: Vec<Vec3>,
-    pub path_indicies: Vec<(bool, usize, usize)>,
-}
-
-#[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable, Default)]
-#[repr(C)]
-pub struct Line {
-    pub start: Vec3,
-    pub end: Vec3,
-    pub colour: Vec3,
+    path_buf: Vec<Vec3>,
+    colour_buf: Vec<Vec3>,
+    path_indicies: Vec<(bool, usize, usize)>,
 }
 
 impl Turtle {
     pub fn new(pos: Vec3, colour: Vec3) -> Self {
         Turtle {
+            scale: 1.0,
             heading: Vec3::X,
             normal: Vec3::Y,
             stack: Vec::new(),
@@ -42,6 +37,7 @@ impl Turtle {
 
     /// Resets the turtles path, position, heading, normal and colour
     pub fn reset(&mut self, pos: Vec3, colour: Vec3) {
+        self.scale = 1.0;
         self.heading = Vec3::X;
         self.normal = Vec3::Y;
         self.stack = Vec::new();
@@ -64,6 +60,7 @@ impl Turtle {
             Action::Colour(colour) => self.set_colour(colour),
             Action::Push => self.push(),
             Action::Pop => self.pop(),
+            Action::Nop => (),
         };
     }
 
@@ -82,8 +79,8 @@ impl Turtle {
                 self.path_indicies[state.0].2,
             );
             self.path_indicies.push(idx);
-            self.heading = state.1;
-            self.normal = state.2;
+            self.normal = state.1;
+            self.heading = state.2;
         }
     }
 
@@ -92,7 +89,8 @@ impl Turtle {
         let pos = self.path_buf[self.path_indicies.last().unwrap().1];
         let idx = (false, self.path_buf.len(), self.colour_buf.len() - 1);
 
-        self.path_buf.push(pos + distance * self.heading);
+        self.path_buf
+            .push(pos + (distance * self.scale) * self.heading);
         self.path_indicies.push(idx);
     }
 
@@ -109,5 +107,71 @@ impl Turtle {
     /// Set the line colour
     pub fn set_colour(&mut self, colour: Vec3) {
         self.colour_buf.push(colour);
+    }
+
+    pub fn set_scale(&mut self, scale: f32) {
+        self.scale = scale;
+    }
+
+    /// Write the turtle's path to GPU buffers using line strips
+    /// Returns a Vec of (start_index, count) pairs for each continuous line segment
+    pub fn write_to_buffers(
+        &self,
+        queue: &wgpu::Queue,
+        vertex_buffer: &wgpu::Buffer,
+        color_buffer: &wgpu::Buffer,
+        index_buffer: &wgpu::Buffer,
+    ) -> Vec<(u32, u32)> {
+        let mut vertices = Vec::new();
+        let mut colors = Vec::new();
+        let mut indices = Vec::new();
+        let mut segments = Vec::new(); // (start_index, count) for each line strip
+
+        let mut vertex_count = 0u32;
+        let mut segment_start = 0u32;
+        let mut segment_length = 0u32;
+        let mut last_path_idx = 0;
+
+        for (jump, path_idx, colour_idx) in self.path_indicies.iter().skip(1) {
+            if *jump {
+                // End the current segment if it has any vertices
+                if segment_length > 0 {
+                    segments.push((segment_start, segment_length));
+                    segment_start = indices.len() as u32;
+                    segment_length = 0;
+                }
+                last_path_idx = *path_idx;
+            } else {
+                // For the first vertex of a new segment, add the starting point
+                if segment_length == 0 {
+                    vertices.push(self.path_buf[last_path_idx]);
+                    colors.push(self.colour_buf[*colour_idx]);
+                    indices.push(vertex_count);
+                    vertex_count += 1;
+                    segment_length += 1;
+                }
+
+                // Add the end point of this line
+                vertices.push(self.path_buf[*path_idx]);
+                colors.push(self.colour_buf[*colour_idx]);
+                indices.push(vertex_count);
+                vertex_count += 1;
+                segment_length += 1;
+
+                last_path_idx = *path_idx;
+            }
+        }
+
+        // Don't forget the last segment
+        if segment_length > 0 {
+            segments.push((segment_start, segment_length));
+        }
+
+        // Write to GPU buffers
+        queue.write_buffer(vertex_buffer, 0, bytemuck::cast_slice(&vertices));
+        queue.write_buffer(color_buffer, 0, bytemuck::cast_slice(&colors));
+        queue.write_buffer(index_buffer, 0, bytemuck::cast_slice(&indices));
+
+        segments
     }
 }

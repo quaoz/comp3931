@@ -1,9 +1,3 @@
-struct Line {
-    @location(0) start: vec3<f32>,
-    @location(1) end: vec3<f32>,
-    @location(2) colour: vec3<f32>,
-}
-
 struct Uniforms {
     view_proj: mat4x4<f32>,
 }
@@ -18,14 +12,13 @@ struct VertexOutput {
 
 @vertex
 fn vs_main(
-    @builtin(vertex_index) vertex_index: u32,
-    line: Line,
+    @location(0) position: vec3<f32>,
+    @location(1) colour: vec3<f32>,
 ) -> VertexOutput {
     var out: VertexOutput;
 
-    let position = select(line.end, line.start, vertex_index == 0u);
     out.clip_position = uniforms.view_proj * vec4<f32>(position, 1.0);
-    out.colour = line.colour;
+    out.colour = colour;
 
     return out;
 }

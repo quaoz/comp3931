@@ -17,7 +17,7 @@ impl Display {
     pub async fn new(window: Arc<Window>) -> anyhow::Result<Display> {
         // create wgpu instance
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
-            backends: wgpu::Backends::PRIMARY,
+            backends: wgpu::Backends::all().with_env(),
             ..Default::default()
         });
 
@@ -73,10 +73,6 @@ impl Display {
         })
     }
 
-    pub fn window(&self) -> &Window {
-        &self.window
-    }
-
     pub fn resize(&mut self, width: u32, height: u32) {
         if width != 0 && height != 0 {
             self.config.width = width;
@@ -97,13 +93,5 @@ impl Display {
 
     pub fn is_surface_configured(&self) -> bool {
         self.is_surface_configured
-    }
-
-    pub fn width(&self) -> u32 {
-        self.window.inner_size().width
-    }
-
-    pub fn height(&self) -> u32 {
-        self.window.inner_size().height
     }
 }
