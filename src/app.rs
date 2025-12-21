@@ -1,88 +1,59 @@
-use std::{sync::Arc, time::Instant};
+use std::sync::Arc;
 
-use anyhow::{Ok, Result};
-use pollster::FutureExt;
+use anyhow::Ok;
 use winit::{
     application::ApplicationHandler,
     event::{DeviceEvent, DeviceId, WindowEvent},
-    event_loop::{ActiveEventLoop, EventLoop, EventLoopProxy},
-    keyboard::{KeyCode, PhysicalKey},
-    window::{CursorGrabMode, Window},
+    event_loop::{ActiveEventLoop, EventLoopProxy},
+    keyboard::PhysicalKey,
+    window::Window,
 };
 
-use crate::framework::{display::Display, renderer::Renderer};
+use crate::state::State;
 
-pub struct App<R: Renderer> {
-    ctx: Option<(Display, R)>,
-    proxy: Option<EventLoopProxy<Result<(Display, R)>>>,
-    last_time: Instant,
-    cursor_grabbed: bool,
+#[derive(Debug)]
+pub enum AppEvent {
+    Start(State),
 }
 
-impl<R: Renderer + 'static> App<R> {
-    pub fn new(event_loop: &EventLoop<anyhow::Result<(Display, R)>>) -> Self {
-        Self {
-            ctx: None,
-            proxy: Some(event_loop.create_proxy()),
-            last_time: Instant::now(),
-            cursor_grabbed: true,
-        }
-    }
+pub struct App {
+    proxy: EventLoopProxy<AppEvent>,
+    state: Option<State>,
+}
 
-    fn set_cursor_grab(&mut self, grabbed: bool) {
-        if let Some((display, _)) = &self.ctx {
-            self.cursor_grabbed = grabbed;
-
-            if grabbed {
-                display
-                    .window
-                    .set_cursor_grab(CursorGrabMode::Confined)
-                    .or_else(|_| display.window.set_cursor_grab(CursorGrabMode::Locked))
-                    .unwrap();
-                display.window.set_cursor_visible(false);
-            } else {
-                display
-                    .window
-                    .set_cursor_grab(CursorGrabMode::None)
-                    .unwrap();
-                display.window.set_cursor_visible(true);
-            }
-        }
+impl App {
+    pub fn new(proxy: EventLoopProxy<AppEvent>) -> Self {
+        Self { proxy, state: None }
     }
 }
 
-impl<R: Renderer> ApplicationHandler<Result<(Display, R)>> for App<R> {
+impl ApplicationHandler<AppEvent> for App {
     fn resumed(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
+        let window_attrs = Window::default_attributes();
         let window = Arc::new(
             event_loop
-                .create_window(Window::default_attributes())
-                .unwrap(),
+                .create_window(window_attrs)
+                .expect("Failed to create window"),
         );
 
-        if let Some(proxy) = self.proxy.take() {
-            let display_future = Display::new(window.clone());
-            let result = (move || {
-                let display = display_future.block_on()?;
-                let renderer = R::init(&display)?;
-
-                Ok((display, renderer))
-            })();
-
-            proxy
-                .send_event(result)
-                .expect("Unable to send (display, renderer)");
-        }
+        let proxy = self.proxy.clone();
+        std::thread::spawn(move || {
+            pollster::block_on(async move {
+                let state = State::new(window).await?;
+                proxy.send_event(AppEvent::Start(state)).unwrap();
+                Ok(())
+            })
+        });
     }
 
-    #[allow(unused_mut)]
-    fn user_event(&mut self, _event_loop: &ActiveEventLoop, mut event: Result<(Display, R)>) {
-        let (display, renderer) = event.unwrap();
-        display.window.request_redraw();
-
-        self.ctx = Some((display, renderer));
-        self.last_time = Instant::now();
-
-        self.set_cursor_grab(true);
+    fn user_event(&mut self, _event_loop: &winit::event_loop::ActiveEventLoop, event: AppEvent) {
+        match event {
+            AppEvent::Start(mut state) => {
+                state.set_cursor_captured(true);
+                state.display.window().request_redraw();
+                self.state = Some(state);
+            }
+        }
     }
 
     fn device_event(
@@ -91,19 +62,13 @@ impl<R: Renderer> ApplicationHandler<Result<(Display, R)>> for App<R> {
         _device_id: DeviceId,
         event: DeviceEvent,
     ) {
-        let (_, renderer) = match &mut self.ctx {
-            Some(canvas) => canvas,
+        let app_state = match &mut self.state {
+            Some(s) => s,
             None => return,
         };
 
-        match event {
-            DeviceEvent::Button { button, state } => {
-                renderer.handle_mouse_button(button, state.is_pressed());
-            }
-            DeviceEvent::MouseMotion { delta: (dx, dy) } => {
-                renderer.handle_mouse_move(dx, dy);
-            }
-            _ => {}
+        if let DeviceEvent::MouseMotion { delta: (dx, dy) } = event {
+            app_state.handle_mouse_motion(dx, dy);
         }
     }
 
@@ -113,44 +78,33 @@ impl<R: Renderer> ApplicationHandler<Result<(Display, R)>> for App<R> {
         _window_id: winit::window::WindowId,
         event: WindowEvent,
     ) {
-        if let Some((display, renderer)) = &mut self.ctx {
-            match event {
-                WindowEvent::CloseRequested => event_loop.exit(),
-                WindowEvent::Resized(new_size) => {
-                    display.resize(new_size.width, new_size.height);
-                    renderer.resize(display);
-                }
-                WindowEvent::KeyboardInput { event, .. } => {
-                    if let PhysicalKey::Code(code) = event.physical_key {
-                        if code == KeyCode::Escape && event.state.is_pressed() {
-                            self.set_cursor_grab(!self.cursor_grabbed);
-                        } else {
-                            renderer.handle_keyboard(code, event.state.is_pressed());
-                        }
-                    }
-                }
-                WindowEvent::Focused(focused) => {
-                    if focused && self.cursor_grabbed {
-                        self.set_cursor_grab(true);
-                    }
-                }
-                WindowEvent::RedrawRequested => {
-                    display.window.request_redraw();
+        let app_state = match &mut self.state {
+            Some(s) => s,
+            None => return,
+        };
 
-                    let dt = self.last_time.elapsed();
-                    self.last_time = Instant::now();
-
-                    renderer.update(display, dt);
-
-                    if display.is_surface_configured() {
-                        renderer.render(display);
-                    } else {
-                        display.configure();
-                        renderer.resize(display);
-                    }
-                }
-                _ => {}
+        match event {
+            WindowEvent::CloseRequested => {
+                event_loop.exit();
             }
+            WindowEvent::Resized(new_size) => {
+                app_state.resize(new_size.width, new_size.height);
+            }
+            WindowEvent::Focused(focused) => {
+                app_state.set_cursor_captured(focused);
+            }
+            WindowEvent::RedrawRequested => {
+                app_state.render();
+            }
+            WindowEvent::MouseWheel { delta, .. } => {
+                app_state.handle_mouse_scroll(&delta);
+            }
+            WindowEvent::KeyboardInput { event, .. } => {
+                if let PhysicalKey::Code(code) = event.physical_key {
+                    app_state.handle_key(code, event.state.is_pressed());
+                }
+            }
+            _ => {}
         }
     }
 }

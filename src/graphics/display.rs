@@ -1,16 +1,15 @@
 use std::sync::Arc;
 
-use wgpu::{Device, PresentMode, Queue, Surface, SurfaceConfiguration};
 use winit::window::Window;
 
 #[derive(Debug)]
 pub struct Display {
-    surface: Surface<'static>,
+    window: Arc<Window>,
+    surface: wgpu::Surface<'static>,
+    pub surface_config: wgpu::SurfaceConfiguration,
     is_surface_configured: bool,
-    pub window: Arc<Window>,
-    pub config: SurfaceConfiguration,
-    pub device: Device,
-    pub queue: Queue,
+    pub device: wgpu::Device,
+    pub queue: wgpu::Queue,
 }
 
 impl Display {
@@ -52,22 +51,22 @@ impl Display {
             .unwrap_or(surface_caps.formats[0]);
 
         let size = window.inner_size();
-        let config = SurfaceConfiguration {
+        let surface_config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format,
             width: size.width,
             height: size.height,
-            present_mode: PresentMode::AutoVsync,
+            present_mode: wgpu::PresentMode::AutoVsync,
             alpha_mode: surface_caps.alpha_modes[0],
             view_formats: vec![],
             desired_maximum_frame_latency: 2,
         };
 
         Ok(Self {
-            is_surface_configured: false,
             surface,
+            surface_config,
+            is_surface_configured: false,
             window,
-            config,
             device,
             queue,
         })
@@ -75,9 +74,9 @@ impl Display {
 
     pub fn resize(&mut self, width: u32, height: u32) {
         if width != 0 && height != 0 {
-            self.config.width = width;
-            self.config.height = height;
-            self.surface.configure(&self.device, &self.config);
+            self.surface_config.width = width;
+            self.surface_config.height = height;
+            self.surface.configure(&self.device, &self.surface_config);
             self.is_surface_configured = true;
         }
     }
@@ -87,11 +86,19 @@ impl Display {
         self.resize(size.width, size.height);
     }
 
+    pub fn size(&self) -> (u32, u32) {
+        (self.surface_config.width, self.surface_config.height)
+    }
+
     pub fn surface(&self) -> &wgpu::Surface<'static> {
         &self.surface
     }
 
     pub fn is_surface_configured(&self) -> bool {
         self.is_surface_configured
+    }
+
+    pub fn window(&self) -> &Window {
+        &self.window
     }
 }

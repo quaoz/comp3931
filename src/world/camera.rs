@@ -7,7 +7,7 @@ const SAFE_FRAC_PI_2: f32 = FRAC_PI_2 - 0.0001;
 
 #[derive(Debug)]
 pub struct Camera {
-    position: Vec3,
+    pub position: Vec3,
     yaw: f32,
     pitch: f32,
 }
@@ -124,13 +124,12 @@ impl CameraController {
     }
 
     pub fn process_mouse(&mut self, mouse_dx: f64, mouse_dy: f64) {
-        self.rotate_horizontal = mouse_dx as f32;
-        self.rotate_vertical = mouse_dy as f32;
+        self.rotate_horizontal += mouse_dx as f32;
+        self.rotate_vertical += mouse_dy as f32;
     }
 
-    #[allow(unused)]
     pub fn process_mouse_scroll(&mut self, delta: &MouseScrollDelta) {
-        self.scroll = match delta {
+        self.scroll += match delta {
             MouseScrollDelta::LineDelta(_, scroll) => -scroll * 0.5,
             MouseScrollDelta::PixelDelta(PhysicalPosition { y: scroll, .. }) => -*scroll as f32,
         };
@@ -149,10 +148,10 @@ impl CameraController {
         // move forwards/backwards when scrolling (fake zoom)
         let (pitch_sin, pitch_cos) = camera.pitch.sin_cos();
         let scrollward = Vec3::new(pitch_cos * yaw_cos, pitch_sin, pitch_cos * yaw_sin).normalize();
-        camera.position += scrollward * self.scroll * self.speed * self.sensitivity * dt;
+        camera.position += scrollward * self.scroll * self.speed;
         self.scroll = 0.0;
 
-        // handle up.down movement
+        // handle up/down movement
         camera.position.y += (self.amount_up - self.amount_down) * self.speed * dt;
 
         // handle rotation
