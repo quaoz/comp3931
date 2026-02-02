@@ -4,6 +4,13 @@ use glam::Vec3;
 
 const CYLINDER_SEGMENTS: usize = 8;
 
+#[derive(Debug, Clone, Copy)]
+struct PathEntry {
+    jump: bool,
+    path_idx: usize,
+    colour_idx: usize,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Action {
     Travel(f32),
@@ -22,10 +29,12 @@ pub struct Turtle {
     scale: f32,
     heading: Vec3,
     normal: Vec3,
+
+    taper: f32,
     stack: Vec<(usize, Vec3, Vec3)>,
     path_buf: Vec<Vec3>,
     colour_buf: Vec<Vec3>,
-    path_indicies: Vec<(bool, usize, usize)>,
+    path_entries: Vec<PathEntry>,
     mesh_vertices: Vec<Vec3>,
     mesh_normals: Vec<Vec3>,
     mesh_colors: Vec<Vec3>,
@@ -38,10 +47,16 @@ impl Turtle {
             scale: 1.0,
             heading: Vec3::X,
             normal: Vec3::Y,
+
+            taper: 1.0,
             stack: Vec::new(),
             path_buf: vec![pos],
             colour_buf: vec![colour],
-            path_indicies: vec![(true, 0, 0)],
+            path_entries: vec![PathEntry {
+                jump: true,
+                path_idx: 0,
+                colour_idx: 0,
+            }],
             mesh_vertices: Vec::new(),
             mesh_normals: Vec::new(),
             mesh_colors: Vec::new(),
@@ -54,10 +69,15 @@ impl Turtle {
         self.scale = 1.0;
         self.heading = Vec3::X;
         self.normal = Vec3::Y;
+        self.taper = 1.0;
         self.stack = Vec::new();
         self.path_buf = vec![pos];
         self.colour_buf = vec![colour];
-        self.path_indicies = vec![(true, 0, 0)];
+        self.path_entries = vec![PathEntry {
+            jump: true,
+            path_idx: 0,
+            colour_idx: 0,
+        }];
         self.mesh_vertices.clear();
         self.mesh_normals.clear();
         self.mesh_colors.clear();
@@ -86,39 +106,48 @@ impl Turtle {
 
     /// Pushes the current position, heading, normal and colour to the stack
     pub fn push(&mut self) {
-        let path_idx = self.path_indicies.len();
-        self.stack.push((path_idx - 1, self.normal, self.heading));
+        let entry_idx = self.path_entries.len() - 1;
+        self.stack.push((entry_idx, self.normal, self.heading));
     }
 
     /// Pops the last position, heading, normal and colour from the stack
     pub fn pop(&mut self) {
         if let Some(state) = self.stack.pop() {
-            let idx = (
-                true,
-                self.path_indicies[state.0].1,
-                self.path_indicies[state.0].2,
-            );
-            self.path_indicies.push(idx);
+            let prev = self.path_entries[state.0];
+            self.path_entries.push(PathEntry {
+                jump: true,
+                path_idx: prev.path_idx,
+                colour_idx: prev.colour_idx,
+            });
             self.normal = state.1;
             self.heading = state.2;
         }
     }
 
+    fn pos(&self) -> Vec3 {
+        self.path_buf[self.path_entries.last().unwrap().path_idx]
+    }
+
     /// Move `distance` along current heading
     pub fn travel(&mut self, distance: f32) {
-        let pos = self.path_buf[self.path_indicies.last().unwrap().1];
-        let idx = (false, self.path_buf.len(), self.colour_buf.len() - 1);
+        let entry = PathEntry {
+            jump: false,
+            path_idx: self.path_buf.len(),
+            colour_idx: self.colour_buf.len() - 1,
+        };
 
         self.path_buf
-            .push(pos + (distance * self.scale) * self.heading);
-        self.path_indicies.push(idx);
+            .push(self.pos() + (distance * self.scale) * self.heading);
+        self.path_entries.push(entry);
     }
 
     /// Generate a cylinder mesh and advance the turtle
     pub fn branch(&mut self, length: f32, diameter: f32) {
-        let base_pos = self.path_buf[self.path_indicies.last().unwrap().1];
+        let tapered_diameter = diameter * self.taper.powi(self.stack.len() as i32);
+        let radius = (tapered_diameter * self.scale) * 0.5;
+
+        let base_pos = self.pos();
         let tip_pos = base_pos + (length * self.scale) * self.heading;
-        let radius = (diameter * self.scale) * 0.5;
 
         let binormal = self.heading.cross(self.normal).normalize();
         let colour = *self.colour_buf.last().unwrap();
@@ -166,7 +195,7 @@ impl Turtle {
 
     /// Generate a double-sided leaf quad at the current position
     pub fn leaf(&mut self, width: f32, height: f32) {
-        let pos = self.path_buf[self.path_indicies.last().unwrap().1];
+        let pos = self.pos();
         let binormal = self.heading.cross(self.normal).normalize();
         let colour = *self.colour_buf.last().unwrap();
 
@@ -237,87 +266,139 @@ impl Turtle {
         self.scale = scale;
     }
 
-    /// Write the turtle's path to GPU buffers using line strips
-    /// Returns a Vec of (start_index, count) pairs for each continuous line segment
-    pub fn write_to_buffers(
-        &self,
-        queue: &wgpu::Queue,
-        vertex_buffer: &wgpu::Buffer,
-        color_buffer: &wgpu::Buffer,
-        index_buffer: &wgpu::Buffer,
-    ) -> Vec<(u32, u32)> {
+    /// Sets the taper ratio applied per branch nesting depth
+    pub fn set_taper(&mut self, taper: f32) {
+        self.taper = taper;
+    }
+
+    /// Extract line geometry data without writing to GPU
+    pub fn line_geometry(&self) -> LineGeometry {
         let mut vertices = Vec::new();
         let mut colors = Vec::new();
         let mut indices = Vec::new();
-        let mut segments = Vec::new(); // (start_index, count) for each line strip
+        let mut segments = Vec::new();
 
         let mut vertex_count = 0u32;
         let mut segment_start = 0u32;
         let mut segment_length = 0u32;
         let mut last_path_idx = 0;
 
-        for (jump, path_idx, colour_idx) in self.path_indicies.iter().skip(1) {
-            if *jump {
-                // End the current segment if it has any vertices
+        for entry in self.path_entries.iter().skip(1) {
+            if entry.jump {
                 if segment_length > 0 {
                     segments.push((segment_start, segment_length));
                     segment_start = indices.len() as u32;
                     segment_length = 0;
                 }
-                last_path_idx = *path_idx;
+                last_path_idx = entry.path_idx;
             } else {
-                // For the first vertex of a new segment, add the starting point
                 if segment_length == 0 {
                     vertices.push(self.path_buf[last_path_idx]);
-                    colors.push(self.colour_buf[*colour_idx]);
+                    colors.push(self.colour_buf[entry.colour_idx]);
                     indices.push(vertex_count);
                     vertex_count += 1;
                     segment_length += 1;
                 }
 
-                // Add the end point of this line
-                vertices.push(self.path_buf[*path_idx]);
-                colors.push(self.colour_buf[*colour_idx]);
+                vertices.push(self.path_buf[entry.path_idx]);
+                colors.push(self.colour_buf[entry.colour_idx]);
                 indices.push(vertex_count);
                 vertex_count += 1;
                 segment_length += 1;
 
-                last_path_idx = *path_idx;
+                last_path_idx = entry.path_idx;
             }
         }
 
-        // Don't forget the last segment
         if segment_length > 0 {
             segments.push((segment_start, segment_length));
         }
 
-        // Write to GPU buffers
-        queue.write_buffer(vertex_buffer, 0, bytemuck::cast_slice(&vertices));
-        queue.write_buffer(color_buffer, 0, bytemuck::cast_slice(&colors));
-        queue.write_buffer(index_buffer, 0, bytemuck::cast_slice(&indices));
-
-        segments
+        LineGeometry {
+            vertices,
+            colors,
+            indices,
+            segments,
+        }
     }
 
-    /// Write the turtle's mesh data to GPU buffers
-    /// Returns the total number of indices
-    pub fn write_mesh_to_buffers(
-        &self,
-        queue: &wgpu::Queue,
-        vertex_buffer: &wgpu::Buffer,
-        normal_buffer: &wgpu::Buffer,
-        color_buffer: &wgpu::Buffer,
-        index_buffer: &wgpu::Buffer,
-    ) -> u32 {
-        if self.mesh_indices.is_empty() {
-            return 0;
+    /// Extract mesh geometry data without writing to GPU
+    pub fn mesh_geometry(&self) -> MeshGeometry {
+        MeshGeometry {
+            vertices: self.mesh_vertices.clone(),
+            normals: self.mesh_normals.clone(),
+            colors: self.mesh_colors.clone(),
+            indices: self.mesh_indices.clone(),
         }
+    }
+}
 
-        queue.write_buffer(vertex_buffer, 0, bytemuck::cast_slice(&self.mesh_vertices));
-        queue.write_buffer(normal_buffer, 0, bytemuck::cast_slice(&self.mesh_normals));
-        queue.write_buffer(color_buffer, 0, bytemuck::cast_slice(&self.mesh_colors));
-        queue.write_buffer(index_buffer, 0, bytemuck::cast_slice(&self.mesh_indices));
+// ── Geometry data structures ──
 
-        self.mesh_indices.len() as u32
+pub struct LineGeometry {
+    pub vertices: Vec<Vec3>,
+    pub colors: Vec<Vec3>,
+    pub indices: Vec<u32>,
+    pub segments: Vec<(u32, u32)>,
+}
+
+#[derive(Clone)]
+pub struct MeshGeometry {
+    pub vertices: Vec<Vec3>,
+    pub normals: Vec<Vec3>,
+    pub colors: Vec<Vec3>,
+    pub indices: Vec<u32>,
+}
+
+/// Combine multiple line geometries into one, adjusting indices
+pub fn combine_line_geometries(geos: &[LineGeometry]) -> LineGeometry {
+    let mut vertices = Vec::new();
+    let mut colors = Vec::new();
+    let mut indices = Vec::new();
+    let mut segments = Vec::new();
+
+    for geo in geos {
+        let vertex_offset = vertices.len() as u32;
+        let index_offset = indices.len() as u32;
+
+        vertices.extend_from_slice(&geo.vertices);
+        colors.extend_from_slice(&geo.colors);
+        indices.extend(geo.indices.iter().map(|i| i + vertex_offset));
+        segments.extend(
+            geo.segments
+                .iter()
+                .map(|(start, count)| (start + index_offset, *count)),
+        );
+    }
+
+    LineGeometry {
+        vertices,
+        colors,
+        indices,
+        segments,
+    }
+}
+
+/// Combine multiple mesh geometries into one, adjusting indices
+pub fn combine_mesh_geometries(geos: &[MeshGeometry]) -> MeshGeometry {
+    let mut vertices = Vec::new();
+    let mut normals = Vec::new();
+    let mut colors = Vec::new();
+    let mut indices = Vec::new();
+
+    for geo in geos {
+        let vertex_offset = vertices.len() as u32;
+
+        vertices.extend_from_slice(&geo.vertices);
+        normals.extend_from_slice(&geo.normals);
+        colors.extend_from_slice(&geo.colors);
+        indices.extend(geo.indices.iter().map(|i| i + vertex_offset));
+    }
+
+    MeshGeometry {
+        vertices,
+        normals,
+        colors,
+        indices,
     }
 }

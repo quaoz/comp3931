@@ -1,12 +1,14 @@
 struct Uniforms {
     view_proj: mat4x4<f32>,
+    light_dir: vec3<f32>,
+    ambient: f32,
+    // season_tint multiplied against geometry colour each frame (no rebuild needed)
+    season_tint: vec3<f32>,
+    // implicit 4-byte padding to align to 16
 }
 
 @group(0) @binding(0)
 var<uniform> uniforms: Uniforms;
-
-const LIGHT_DIR: vec3<f32> = vec3<f32>(0.5773, 0.5773, -0.5773);
-const AMBIENT: f32 = 0.3;
 
 struct VertexOutput {
     @builtin(position) clip_position: vec4<f32>,
@@ -23,7 +25,7 @@ fn vs_main(
     var out: VertexOutput;
 
     out.clip_position = uniforms.view_proj * vec4<f32>(position, 1.0);
-    out.colour = colour / 255.0;
+    out.colour = colour;
     out.world_normal = normal;
 
     return out;
@@ -32,8 +34,8 @@ fn vs_main(
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let n = normalize(in.world_normal);
-    let diffuse = max(dot(n, LIGHT_DIR), 0.0);
-    let lighting = AMBIENT + (1.0 - AMBIENT) * diffuse;
+    let diffuse = max(dot(n, uniforms.light_dir), 0.0);
+    let lighting = uniforms.ambient + (1.0 - uniforms.ambient) * diffuse;
 
-    return vec4<f32>(in.colour * lighting, 1.0);
+    return vec4<f32>(in.colour * uniforms.season_tint * lighting, 1.0);
 }

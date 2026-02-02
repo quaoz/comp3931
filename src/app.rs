@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use anyhow::Ok;
 use winit::{
     application::ApplicationHandler,
     event::{DeviceEvent, DeviceId, WindowEvent},
@@ -11,7 +10,6 @@ use winit::{
 
 use crate::state::State;
 
-#[derive(Debug)]
 pub enum AppEvent {
     Start(State),
 }
@@ -40,16 +38,18 @@ impl ApplicationHandler<AppEvent> for App {
         std::thread::spawn(move || {
             pollster::block_on(async move {
                 let state = State::new(window).await?;
-                proxy.send_event(AppEvent::Start(state)).unwrap();
-                Ok(())
+                proxy
+                    .send_event(AppEvent::Start(state))
+                    .ok()
+                    .expect("Failed to send start event");
+                anyhow::Ok(())
             })
         });
     }
 
     fn user_event(&mut self, _event_loop: &winit::event_loop::ActiveEventLoop, event: AppEvent) {
         match event {
-            AppEvent::Start(mut state) => {
-                state.set_cursor_captured(true);
+            AppEvent::Start(state) => {
                 state.display.window().request_redraw();
                 self.state = Some(state);
             }
@@ -62,13 +62,13 @@ impl ApplicationHandler<AppEvent> for App {
         _device_id: DeviceId,
         event: DeviceEvent,
     ) {
-        let app_state = match &mut self.state {
+        let state = match &mut self.state {
             Some(s) => s,
             None => return,
         };
 
         if let DeviceEvent::MouseMotion { delta: (dx, dy) } = event {
-            app_state.handle_mouse_motion(dx, dy);
+            state.handle_mouse_motion(dx, dy);
         }
     }
 
@@ -78,30 +78,30 @@ impl ApplicationHandler<AppEvent> for App {
         _window_id: winit::window::WindowId,
         event: WindowEvent,
     ) {
-        let app_state = match &mut self.state {
+        let state = match &mut self.state {
             Some(s) => s,
             None => return,
         };
 
-        match event {
+        match &event {
             WindowEvent::CloseRequested => {
                 event_loop.exit();
             }
             WindowEvent::Resized(new_size) => {
-                app_state.resize(new_size.width, new_size.height);
+                state.resize(new_size.width, new_size.height);
             }
             WindowEvent::Focused(focused) => {
-                app_state.set_cursor_captured(focused);
+                state.set_cursor_captured(*focused);
             }
             WindowEvent::RedrawRequested => {
-                app_state.render();
+                state.render();
             }
             WindowEvent::MouseWheel { delta, .. } => {
-                app_state.handle_mouse_scroll(&delta);
+                state.handle_mouse_scroll(delta);
             }
             WindowEvent::KeyboardInput { event, .. } => {
                 if let PhysicalKey::Code(code) = event.physical_key {
-                    app_state.handle_key(code, event.state.is_pressed());
+                    state.handle_key(code, event.state.is_pressed());
                 }
             }
             _ => {}

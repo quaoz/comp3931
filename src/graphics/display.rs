@@ -8,6 +8,7 @@ pub struct Display {
     surface: wgpu::Surface<'static>,
     pub surface_config: wgpu::SurfaceConfiguration,
     is_surface_configured: bool,
+    pub adapter: wgpu::Adapter,
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
 }
@@ -67,6 +68,7 @@ impl Display {
             surface_config,
             is_surface_configured: false,
             window,
+            adapter,
             device,
             queue,
         })

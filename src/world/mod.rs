@@ -1,19 +1,23 @@
 use std::{f32::consts::PI, time::Duration};
 
-use glam::{Mat4, vec3};
+use glam::{Mat4, Vec3, vec3};
 use winit::{event::MouseScrollDelta, keyboard::KeyCode};
 
-use crate::world::{
-    camera::{Camera, CameraController, Projection},
-    scenes::SceneController,
+use crate::{
+    settings::Settings,
+    world::{
+        camera::{Camera, CameraController, Projection},
+        scenes::SceneController,
+    },
 };
 
 pub mod camera;
+pub mod plants;
 pub mod scenes;
 
 #[derive(Debug)]
 pub struct World {
-    camera: Camera,
+    pub camera: Camera,
     projection: Projection,
     camera_controller: CameraController,
     scene_controller: SceneController,
@@ -34,6 +38,21 @@ impl World {
         }
     }
 
+    pub fn reset_camera(&mut self) {
+        self.camera = Camera::new(vec3(-50.0, 50.0, -50.0), std::f32::consts::FRAC_PI_2, 0.0);
+    }
+
+    pub fn camera_position(&self) -> Vec3 {
+        self.camera.camera_position()
+    }
+
+    pub fn apply_settings(&mut self, settings: &Settings) {
+        self.camera_controller.set_speed(settings.camera.speed);
+        self.camera_controller
+            .set_sensitivity(settings.camera.sensitivity);
+        self.projection.set_fov(settings.display.fov);
+    }
+
     pub fn handle_mouse_motion(&mut self, dx: f64, dy: f64) {
         self.camera_controller.process_mouse(dx, dy);
     }
@@ -44,7 +63,6 @@ impl World {
 
     pub fn handle_keyboard(&mut self, key: KeyCode, pressed: bool) {
         self.camera_controller.process_keyboard(key, pressed);
-        self.scene_controller.handle_keyboard(key, pressed);
     }
 
     pub fn resize(&mut self, width: u32, height: u32) {

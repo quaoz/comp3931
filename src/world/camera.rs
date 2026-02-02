@@ -31,6 +31,10 @@ impl Camera {
             Vec3::Y,
         )
     }
+
+    pub fn camera_position(&self) -> Vec3 {
+        self.position
+    }
 }
 
 #[derive(Debug)]
@@ -55,6 +59,10 @@ impl Projection {
         self.aspect = width as f32 / height as f32;
     }
 
+    pub fn set_fov(&mut self, fov_degrees: f32) {
+        self.fovy = fov_degrees.to_radians();
+    }
+
     pub fn calc_matrix(&self) -> Mat4 {
         Mat4::perspective_rh(self.fovy, self.aspect, self.znear, self.zfar)
     }
@@ -73,6 +81,7 @@ pub struct CameraController {
     scroll: f32,
     speed: f32,
     sensitivity: f32,
+    sprint: bool,
 }
 
 impl CameraController {
@@ -87,9 +96,18 @@ impl CameraController {
             rotate_horizontal: 0.0,
             rotate_vertical: 0.0,
             scroll: 0.0,
+            sprint: false,
             speed,
             sensitivity,
         }
+    }
+
+    pub fn set_speed(&mut self, speed: f32) {
+        self.speed = speed;
+    }
+
+    pub fn set_sensitivity(&mut self, sensitivity: f32) {
+        self.sensitivity = sensitivity;
     }
 
     pub fn process_keyboard(&mut self, key: KeyCode, pressed: bool) -> bool {
@@ -119,6 +137,10 @@ impl CameraController {
                 self.amount_down = amount;
                 true
             }
+            KeyCode::ControlLeft => {
+                self.sprint = pressed;
+                true
+            }
             _ => false,
         }
     }
@@ -137,30 +159,30 @@ impl CameraController {
 
     pub fn update_camera(&mut self, camera: &mut Camera, dt: Duration) {
         let dt = dt.as_secs_f32();
+        let speed = if self.sprint {
+            self.speed * 2.0
+        } else {
+            self.speed
+        };
 
-        // handle left/right/forwards/backwards movement
         let (yaw_sin, yaw_cos) = camera.yaw.sin_cos();
         let forward = Vec3::new(yaw_cos, 0.0, yaw_sin).normalize();
         let right = Vec3::new(-yaw_sin, 0.0, yaw_cos).normalize();
-        camera.position += forward * (self.amount_forward - self.amount_backward) * self.speed * dt;
-        camera.position += right * (self.amount_right - self.amount_left) * self.speed * dt;
+        camera.position += forward * (self.amount_forward - self.amount_backward) * speed * dt;
+        camera.position += right * (self.amount_right - self.amount_left) * speed * dt;
 
-        // move forwards/backwards when scrolling (fake zoom)
         let (pitch_sin, pitch_cos) = camera.pitch.sin_cos();
         let scrollward = Vec3::new(pitch_cos * yaw_cos, pitch_sin, pitch_cos * yaw_sin).normalize();
-        camera.position += scrollward * self.scroll * self.speed;
+        camera.position += scrollward * self.scroll * speed;
         self.scroll = 0.0;
 
-        // handle up/down movement
-        camera.position.y += (self.amount_up - self.amount_down) * self.speed * dt;
+        camera.position.y += (self.amount_up - self.amount_down) * speed * dt;
 
-        // handle rotation
         camera.yaw += self.rotate_horizontal * self.sensitivity;
         camera.pitch += -self.rotate_vertical * self.sensitivity;
         self.rotate_horizontal = 0.0;
         self.rotate_vertical = 0.0;
 
-        // prevent pitch from going too high/low
         camera.pitch = camera.pitch.clamp(-SAFE_FRAC_PI_2, SAFE_FRAC_PI_2);
     }
 }

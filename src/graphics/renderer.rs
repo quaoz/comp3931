@@ -1,4 +1,4 @@
-use glam::Mat4;
+use glam::{Mat4, Vec3};
 use wgpu::{
     BindGroup, Buffer, BufferDescriptor, BufferUsages, RenderPipeline, TextureView,
     VertexBufferLayout,
@@ -7,6 +7,7 @@ use wgpu::{
 
 use crate::{
     graphics::display::Display,
+    settings::Settings,
     world::{World, scenes::SceneBuffers},
 };
 
@@ -67,6 +68,10 @@ fn create_depth_texture(device: &wgpu::Device, width: u32, height: u32) -> Textu
 #[repr(C)]
 struct Uniforms {
     view_proj: Mat4,
+    light_dir: Vec3,
+    ambient: f32,
+    season_tint: Vec3,
+    _pad: f32,
 }
 
 #[derive(Debug)]
@@ -105,6 +110,10 @@ impl Renderer {
 
         let uniforms = Uniforms {
             view_proj: Mat4::IDENTITY,
+            light_dir: Vec3::Y,
+            ambient: 0.3,
+            season_tint: Vec3::ONE,
+            _pad: 0.0,
         };
         let uniform_buffer = display.device.create_buffer_init(&BufferInitDescriptor {
             label: Some("uniform_buffer"),
@@ -119,7 +128,7 @@ impl Renderer {
                     label: None,
                     entries: &[wgpu::BindGroupLayoutEntry {
                         binding: 0,
-                        visibility: wgpu::ShaderStages::VERTEX,
+                        visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
                         ty: wgpu::BindingType::Buffer {
                             ty: wgpu::BufferBindingType::Uniform,
                             has_dynamic_offset: false,
@@ -295,11 +304,18 @@ impl Renderer {
         self.depth_view = create_depth_texture(device, width, height);
     }
 
-    pub fn update(&mut self, display: &Display, world: &mut World) {
+    pub fn mesh_index_count(&self) -> u32 {
+        self.mesh_index_count
+    }
+
+    pub fn update(&mut self, display: &Display, world: &mut World, settings: &mut Settings) {
         self.uniforms.view_proj = world.view_proj();
         display
             .queue
             .write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&self.uniforms));
+
+        let [r, g, b] = settings.display.ground_color;
+        let ground_color = Vec3::new(r, g, b);
 
         let buffers = SceneBuffers {
             queue: &display.queue,
@@ -311,15 +327,24 @@ impl Renderer {
             mesh_color: &self.mesh_color_buffer,
             mesh_index: &self.mesh_index_buffer,
         };
-        let (line_segments, mesh_index_count) = world.scene_controller().set_scene(&buffers);
+        let (line_segments, mesh_index_count) =
+            world
+                .scene_controller()
+                .set_scene(&mut settings.scene, &buffers, ground_color);
         self.line_segments = line_segments;
         self.mesh_index_count = mesh_index_count;
     }
 
-    pub fn render(&mut self, display: &mut Display) {
+    pub fn render_scene(
+        &mut self,
+        display: &mut Display,
+        clear_color: wgpu::Color,
+        show_lines: bool,
+        show_meshes: bool,
+    ) -> Option<(wgpu::SurfaceTexture, TextureView)> {
         let frame = match display.surface().get_current_texture() {
             Ok(frame) => frame,
-            Err(wgpu::SurfaceError::Outdated) => return,
+            Err(wgpu::SurfaceError::Outdated) => return None,
             Err(e) => panic!("{}", e),
         };
 
@@ -327,54 +352,57 @@ impl Renderer {
 
         let mut encoder = display.device.create_command_encoder(&Default::default());
 
-        let mut draw_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("draw_pass"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: &view,
-                resolve_target: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                    store: wgpu::StoreOp::Store,
-                },
-                depth_slice: None,
-            })],
-            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                view: &self.depth_view,
-                depth_ops: Some(wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(1.0),
-                    store: wgpu::StoreOp::Store,
+        {
+            let mut draw_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("draw_pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(clear_color),
+                        store: wgpu::StoreOp::Store,
+                    },
+                    depth_slice: None,
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &self.depth_view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
                 }),
-                stencil_ops: None,
-            }),
-            occlusion_query_set: None,
-            timestamp_writes: None,
-        });
+                occlusion_query_set: None,
+                timestamp_writes: None,
+            });
 
-        // Draw lines
-        draw_pass.set_pipeline(&self.draw_lines);
-        draw_pass.set_bind_group(0, &self.uniforms_bind_group, &[]);
-        draw_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
-        draw_pass.set_vertex_buffer(1, self.color_buffer.slice(..));
-        draw_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+            // Draw lines
+            if show_lines {
+                draw_pass.set_pipeline(&self.draw_lines);
+                draw_pass.set_bind_group(0, &self.uniforms_bind_group, &[]);
+                draw_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+                draw_pass.set_vertex_buffer(1, self.color_buffer.slice(..));
+                draw_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
 
-        for (start_index, count) in &self.line_segments {
-            draw_pass.draw_indexed(*start_index..(*start_index + *count), 0, 0..1);
+                for (start_index, count) in &self.line_segments {
+                    draw_pass.draw_indexed(*start_index..(*start_index + *count), 0, 0..1);
+                }
+            }
+
+            // Draw meshes
+            if show_meshes && self.mesh_index_count > 0 {
+                draw_pass.set_pipeline(&self.draw_mesh);
+                draw_pass.set_bind_group(0, &self.uniforms_bind_group, &[]);
+                draw_pass.set_vertex_buffer(0, self.mesh_vertex_buffer.slice(..));
+                draw_pass.set_vertex_buffer(1, self.mesh_color_buffer.slice(..));
+                draw_pass.set_vertex_buffer(2, self.mesh_normal_buffer.slice(..));
+                draw_pass
+                    .set_index_buffer(self.mesh_index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+                draw_pass.draw_indexed(0..self.mesh_index_count, 0, 0..1);
+            }
         }
-
-        // Draw meshes
-        if self.mesh_index_count > 0 {
-            draw_pass.set_pipeline(&self.draw_mesh);
-            draw_pass.set_bind_group(0, &self.uniforms_bind_group, &[]);
-            draw_pass.set_vertex_buffer(0, self.mesh_vertex_buffer.slice(..));
-            draw_pass.set_vertex_buffer(1, self.mesh_color_buffer.slice(..));
-            draw_pass.set_vertex_buffer(2, self.mesh_normal_buffer.slice(..));
-            draw_pass.set_index_buffer(self.mesh_index_buffer.slice(..), wgpu::IndexFormat::Uint32);
-            draw_pass.draw_indexed(0..self.mesh_index_count, 0, 0..1);
-        }
-
-        drop(draw_pass);
 
         display.queue.submit([encoder.finish()]);
-        frame.present();
+        Some((frame, view))
     }
 }
