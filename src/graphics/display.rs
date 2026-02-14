@@ -57,7 +57,7 @@ impl Display {
             format,
             width: size.width,
             height: size.height,
-            present_mode: wgpu::PresentMode::AutoVsync,
+            present_mode: wgpu::PresentMode::AutoVsync, // TODO: make setting
             alpha_mode: surface_caps.alpha_modes[0],
             view_formats: vec![],
             desired_maximum_frame_latency: 2,
@@ -98,6 +98,20 @@ impl Display {
 
     pub fn is_surface_configured(&self) -> bool {
         self.is_surface_configured
+    }
+
+    pub fn set_vsync(&mut self, vsync: bool) {
+        let mode = if vsync {
+            wgpu::PresentMode::AutoVsync
+        } else {
+            wgpu::PresentMode::AutoNoVsync
+        };
+        if self.surface_config.present_mode != mode {
+            self.surface_config.present_mode = mode;
+            if self.is_surface_configured {
+                self.surface.configure(&self.device, &self.surface_config);
+            }
+        }
     }
 
     pub fn window(&self) -> &Window {

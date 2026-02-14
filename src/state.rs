@@ -9,7 +9,7 @@ use winit::{
 
 use crate::{
     graphics::{display::Display, renderer::Renderer},
-    settings::Settings,
+    settings::{Settings, season_needs_rebuild},
     world::World,
 };
 
@@ -20,11 +20,13 @@ pub struct State {
     pub last_render_time: Instant,
     pub focused: bool,
     pub settings: Settings,
+    last_draw_time: Instant,
+    current_vsync: bool,
 }
 
 impl State {
     pub async fn new(window: Arc<Window>) -> Result<Self> {
-        let display = Display::new(window).await?;
+        let display = Display::new(window.clone()).await?;
         let renderer = Renderer::init(&display)?;
         let world = World::new(display.surface_config.width, display.surface_config.height);
         let settings = Settings::default();
@@ -34,6 +36,8 @@ impl State {
             renderer,
             world,
             last_render_time: Instant::now(),
+            last_draw_time: Instant::now(),
+            current_vsync: true,
             focused: false,
             settings,
         })
@@ -49,6 +53,16 @@ impl State {
         let dt = self.last_render_time.elapsed();
         self.last_render_time = Instant::now();
 
+        // Season auto-advance: tint updates every frame via shader, geometry only when age changes
+        if self.settings.env.auto_advance {
+            let old = self.settings.env.season;
+            let new = (old + self.settings.env.season_speed * dt.as_secs_f32()).rem_euclid(1.0);
+            self.settings.env.season = new;
+            if season_needs_rebuild(old, new) {
+                self.settings.env.dirty = true;
+            }
+        }
+
         self.world.apply_settings(&self.settings);
         self.world.update(dt);
         self.renderer
@@ -56,6 +70,23 @@ impl State {
     }
 
     pub fn draw(&mut self) {
+        // Apply vsync setting changes
+        let want_vsync = self.settings.display.vsync;
+        if want_vsync != self.current_vsync {
+            self.display.set_vsync(want_vsync);
+            self.current_vsync = want_vsync;
+        }
+
+        // Frame rate cap: skip draw if not enough time has elapsed
+        let frame_target = self.settings.display.frame_target;
+        if frame_target > 0 {
+            let min_frame = std::time::Duration::from_secs_f32(1.0 / frame_target as f32);
+            if self.last_draw_time.elapsed() < min_frame {
+                return;
+            }
+        }
+        self.last_draw_time = Instant::now();
+
         if !self.display.is_surface_configured() {
             self.display.configure();
             let (w, h) = self.display.size();
@@ -114,7 +145,11 @@ impl State {
         self.world.handle_mouse_scroll(delta);
     }
 
-    pub fn handle_mouse_button() {}
+    pub fn handle_pinch(&mut self, delta: f64) {
+        if self.focused {
+            self.world.handle_pinch(delta);
+        }
+    }
 
     pub fn handle_key(&mut self, code: KeyCode, pressed: bool) {
         if self.focused {

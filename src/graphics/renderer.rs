@@ -7,9 +7,16 @@ use wgpu::{
 
 use crate::{
     graphics::display::Display,
-    settings::Settings,
+    settings::{Settings, season_tint},
     world::{World, scenes::SceneBuffers},
 };
+
+// Uniforms must match the WGSL struct layout exactly.
+// view_proj: mat4x4  (64 bytes, offset 0)
+// light_dir: vec3    (12 bytes, offset 64, AlignOf=16 ✓)
+// ambient:   f32     (4 bytes,  offset 76)
+// season_tint: vec3  (12 bytes, offset 80, AlignOf=16 ✓)
+// _pad:      f32     (4 bytes,  offset 92) — total 96 bytes
 
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 
@@ -309,13 +316,19 @@ impl Renderer {
     }
 
     pub fn update(&mut self, display: &Display, world: &mut World, settings: &mut Settings) {
+        let light_pos = Vec3::from(settings.env.light_position);
         self.uniforms.view_proj = world.view_proj();
+        self.uniforms.light_dir = light_pos.normalize_or(Vec3::Y);
+        self.uniforms.ambient = settings.env.ambient;
+        self.uniforms.season_tint = season_tint(settings.env.season);
         display
             .queue
             .write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&self.uniforms));
 
         let [r, g, b] = settings.display.ground_color;
         let ground_color = Vec3::new(r, g, b);
+
+        let camera_pos = world.camera_position();
 
         let buffers = SceneBuffers {
             queue: &display.queue,
@@ -327,14 +340,21 @@ impl Renderer {
             mesh_color: &self.mesh_color_buffer,
             mesh_index: &self.mesh_index_buffer,
         };
-        let (line_segments, mesh_index_count) =
-            world
-                .scene_controller()
-                .set_scene(&mut settings.scene, &buffers, ground_color);
+        let (line_segments, mesh_index_count) = world.scene_controller().set_scene(
+            &mut settings.scene,
+            &mut settings.env,
+            &settings.lod,
+            camera_pos,
+            &buffers,
+            ground_color,
+            settings.display.debug_mode,
+        );
         self.line_segments = line_segments;
         self.mesh_index_count = mesh_index_count;
     }
 
+    /// Render the scene and submit commands, returning the frame and view
+    /// for the caller to composite additional layers before presenting.
     pub fn render_scene(
         &mut self,
         display: &mut Display,

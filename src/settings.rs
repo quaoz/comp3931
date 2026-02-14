@@ -96,6 +96,45 @@ impl SceneSettings {
     }
 }
 
+// ── Environment Settings ──
+
+pub struct EnvironmentSettings {
+    pub light_position: [f32; 3],
+    pub ambient: f32,
+    pub tropism_strength: f32,
+    pub gravitropism_strength: f32,
+    pub wind_azimuth: f32,
+    pub wind_strength: f32,
+    pub wind_turbulence: f32,
+    pub taper: f32,
+    pub seed: u64,
+    // Season: 0.0=spring, 0.25=summer, 0.5=autumn, 0.75=winter
+    pub season: f32,
+    pub auto_advance: bool,
+    pub season_speed: f32,
+    pub dirty: bool,
+}
+
+impl Default for EnvironmentSettings {
+    fn default() -> Self {
+        Self {
+            light_position: [0.0, 100.0, 0.0],
+            ambient: 0.3,
+            tropism_strength: 0.0,
+            gravitropism_strength: 0.0,
+            wind_azimuth: 0.0,
+            wind_strength: 0.0,
+            wind_turbulence: 0.0,
+            taper: 1.0,
+            seed: 0,
+            season: 0.25, // start in summer
+            auto_advance: false,
+            season_speed: 0.02,
+            dirty: false,
+        }
+    }
+}
+
 // ── Camera Settings ──
 
 pub struct CameraSettings {
@@ -121,6 +160,9 @@ pub struct DisplaySettings {
     pub show_lines: bool,
     pub show_meshes: bool,
     pub debug_mode: bool,
+    pub vsync: bool,
+    /// Target frames per second. 0 = unlimited.
+    pub frame_target: u32,
 }
 
 impl Default for DisplaySettings {
@@ -132,6 +174,34 @@ impl Default for DisplaySettings {
             show_lines: false,
             show_meshes: true,
             debug_mode: false,
+            vsync: true,
+            frame_target: 0,
+        }
+    }
+}
+
+// ── LOD Settings ──
+
+pub struct LodSettings {
+    /// Distance within which full detail is rendered (8 cylinder segments).
+    pub near_threshold: f32,
+    /// Distance within which medium detail is rendered (5 cylinder segments).
+    pub mid_threshold: f32,
+    /// Distance beyond which minimum detail is rendered (3 cylinder segments).
+    /// Plants further than this skip mesh generation entirely.
+    pub far_threshold: f32,
+    /// Hard cap on total mesh indices. 0 = no cap.
+    /// When exceeded, plants are rendered at a higher LOD tier (lower detail) to stay under budget.
+    pub max_indices: u32,
+}
+
+impl Default for LodSettings {
+    fn default() -> Self {
+        Self {
+            near_threshold: 80.0,
+            mid_threshold: 160.0,
+            far_threshold: 300.0,
+            max_indices: 0,
         }
     }
 }
@@ -153,8 +223,10 @@ impl DisplaySettings {
 #[derive(Default)]
 pub struct Settings {
     pub scene: SceneSettings,
+    pub env: EnvironmentSettings,
     pub camera: CameraSettings,
     pub display: DisplaySettings,
+    pub lod: LodSettings,
 }
 
 // ── Season Utilities ──

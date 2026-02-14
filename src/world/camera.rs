@@ -5,11 +5,23 @@ use winit::{dpi::PhysicalPosition, event::MouseScrollDelta, keyboard::KeyCode};
 
 const SAFE_FRAC_PI_2: f32 = FRAC_PI_2 - 0.0001;
 
+#[derive(Debug, Clone)]
+pub enum CameraMode {
+    Fps,
+    Orbit {
+        target: Vec3,
+        azimuth: f32,
+        elevation: f32,
+        distance: f32,
+    },
+}
+
 #[derive(Debug)]
 pub struct Camera {
     pub position: Vec3,
     yaw: f32,
     pitch: f32,
+    pub mode: CameraMode,
 }
 
 impl Camera {
@@ -18,23 +30,75 @@ impl Camera {
             position: position.into(),
             yaw,
             pitch,
+            mode: CameraMode::Fps,
         }
     }
 
     pub fn calc_matrix(&self) -> Mat4 {
-        let (sin_pitch, cos_pitch) = self.pitch.sin_cos();
-        let (sin_yaw, cos_yaw) = self.yaw.sin_cos();
-
-        Mat4::look_to_rh(
-            self.position,
-            Vec3::new(cos_pitch * cos_yaw, sin_pitch, cos_pitch * sin_yaw).normalize(),
-            Vec3::Y,
-        )
+        match &self.mode {
+            CameraMode::Fps => {
+                let (sin_pitch, cos_pitch) = self.pitch.sin_cos();
+                let (sin_yaw, cos_yaw) = self.yaw.sin_cos();
+                Mat4::look_to_rh(
+                    self.position,
+                    Vec3::new(cos_pitch * cos_yaw, sin_pitch, cos_pitch * sin_yaw).normalize(),
+                    Vec3::Y,
+                )
+            }
+            CameraMode::Orbit {
+                target,
+                azimuth,
+                elevation,
+                distance,
+            } => {
+                let eye = orbit_eye(*target, *azimuth, *elevation, *distance);
+                Mat4::look_at_rh(eye, *target, Vec3::Y)
+            }
+        }
     }
 
     pub fn camera_position(&self) -> Vec3 {
-        self.position
+        match &self.mode {
+            CameraMode::Fps => self.position,
+            CameraMode::Orbit {
+                target,
+                azimuth,
+                elevation,
+                distance,
+            } => orbit_eye(*target, *azimuth, *elevation, *distance),
+        }
     }
+
+    pub fn set_orbit(&mut self, target: Vec3, distance: f32) {
+        self.mode = CameraMode::Orbit {
+            target,
+            azimuth: std::f32::consts::FRAC_PI_4,
+            elevation: 0.4,
+            distance,
+        };
+    }
+
+    pub fn set_fps(&mut self) {
+        if let CameraMode::Orbit {
+            target, distance, ..
+        } = &self.mode
+        {
+            // Restore FPS position roughly where orbit was looking from
+            self.position = orbit_eye(*target, std::f32::consts::FRAC_PI_4, 0.4, *distance);
+        }
+        self.mode = CameraMode::Fps;
+    }
+}
+
+fn orbit_eye(target: Vec3, azimuth: f32, elevation: f32, distance: f32) -> Vec3 {
+    let (el_sin, el_cos) = elevation.sin_cos();
+    let (az_sin, az_cos) = azimuth.sin_cos();
+    target
+        + Vec3::new(
+            distance * el_cos * az_cos,
+            distance * el_sin,
+            distance * el_cos * az_sin,
+        )
 }
 
 #[derive(Debug)]
@@ -157,32 +221,57 @@ impl CameraController {
         };
     }
 
+    /// Handle a trackpad pinch gesture. Positive delta = fingers spreading (zoom in).
+    pub fn process_pinch(&mut self, delta: f32) {
+        self.scroll -= delta * 20.0;
+    }
+
     pub fn update_camera(&mut self, camera: &mut Camera, dt: Duration) {
-        let dt = dt.as_secs_f32();
-        let speed = if self.sprint {
-            self.speed * 2.0
-        } else {
-            self.speed
-        };
+        match &mut camera.mode {
+            CameraMode::Fps => {
+                let dt = dt.as_secs_f32();
+                let speed = if self.sprint {
+                    self.speed * 2.0
+                } else {
+                    self.speed
+                };
 
-        let (yaw_sin, yaw_cos) = camera.yaw.sin_cos();
-        let forward = Vec3::new(yaw_cos, 0.0, yaw_sin).normalize();
-        let right = Vec3::new(-yaw_sin, 0.0, yaw_cos).normalize();
-        camera.position += forward * (self.amount_forward - self.amount_backward) * speed * dt;
-        camera.position += right * (self.amount_right - self.amount_left) * speed * dt;
+                let (yaw_sin, yaw_cos) = camera.yaw.sin_cos();
+                let forward = Vec3::new(yaw_cos, 0.0, yaw_sin).normalize();
+                let right = Vec3::new(-yaw_sin, 0.0, yaw_cos).normalize();
+                camera.position +=
+                    forward * (self.amount_forward - self.amount_backward) * speed * dt;
+                camera.position += right * (self.amount_right - self.amount_left) * speed * dt;
 
-        let (pitch_sin, pitch_cos) = camera.pitch.sin_cos();
-        let scrollward = Vec3::new(pitch_cos * yaw_cos, pitch_sin, pitch_cos * yaw_sin).normalize();
-        camera.position += scrollward * self.scroll * speed;
-        self.scroll = 0.0;
+                let (pitch_sin, pitch_cos) = camera.pitch.sin_cos();
+                let scrollward =
+                    Vec3::new(pitch_cos * yaw_cos, pitch_sin, pitch_cos * yaw_sin).normalize();
+                camera.position += scrollward * self.scroll * speed;
+                self.scroll = 0.0;
 
-        camera.position.y += (self.amount_up - self.amount_down) * speed * dt;
+                camera.position.y += (self.amount_up - self.amount_down) * speed * dt;
 
-        camera.yaw += self.rotate_horizontal * self.sensitivity;
-        camera.pitch += -self.rotate_vertical * self.sensitivity;
-        self.rotate_horizontal = 0.0;
-        self.rotate_vertical = 0.0;
+                camera.yaw += self.rotate_horizontal * self.sensitivity;
+                camera.pitch += -self.rotate_vertical * self.sensitivity;
+                self.rotate_horizontal = 0.0;
+                self.rotate_vertical = 0.0;
 
-        camera.pitch = camera.pitch.clamp(-SAFE_FRAC_PI_2, SAFE_FRAC_PI_2);
+                camera.pitch = camera.pitch.clamp(-SAFE_FRAC_PI_2, SAFE_FRAC_PI_2);
+            }
+            CameraMode::Orbit {
+                azimuth,
+                elevation,
+                distance,
+                ..
+            } => {
+                *azimuth += self.rotate_horizontal * self.sensitivity * 3.0;
+                *elevation = (*elevation - self.rotate_vertical * self.sensitivity * 3.0)
+                    .clamp(0.05, SAFE_FRAC_PI_2);
+                *distance = (*distance + self.scroll * self.speed * 0.3).max(1.0);
+                self.rotate_horizontal = 0.0;
+                self.rotate_vertical = 0.0;
+                self.scroll = 0.0;
+            }
+        }
     }
 }

@@ -1,10 +1,12 @@
-use std::f32::consts::FRAC_PI_2;
+use std::f32::consts::{FRAC_PI_2, TAU};
 
-use glam::Vec3;
+use glam::{Vec3, vec3};
 use wgpu::{Buffer, Queue};
 
 use crate::{
-    settings::{PlantType, SceneData, SceneSettings},
+    settings::{
+        EnvironmentSettings, LodSettings, PlantType, SceneData, SceneSettings, season_growth_factor,
+    },
     util::{
         rng,
         turtle::{MeshGeometry, Turtle, combine_line_geometries, combine_mesh_geometries},
@@ -192,6 +194,55 @@ fn ground_geometry(color: Vec3) -> MeshGeometry {
     }
 }
 
+// ── LOD helpers ──
+
+fn lod_tier(dist: f32, lod: &LodSettings) -> u8 {
+    if dist < lod.near_threshold {
+        0
+    } else if dist < lod.mid_threshold {
+        1
+    } else if dist < lod.far_threshold {
+        2
+    } else {
+        3
+    }
+}
+
+fn lod_params(tier: u8) -> (usize, f32) {
+    match tier {
+        0 => (8, 0.0),
+        1 => (5, 0.0),
+        2 => (3, 0.005),
+        _ => (0, 1000.0), // skip mesh entirely for very distant plants
+    }
+}
+
+// ── Debug Helpers ──
+
+/// Horizontal circle at ground level for LOD boundary visualisation.
+fn lod_circle_geometry(
+    center: Vec3,
+    radius: f32,
+    color: Vec3,
+) -> crate::util::turtle::LineGeometry {
+    const SEGMENTS: usize = 64;
+    let cx = center.x;
+    let cz = center.z;
+    let vertices: Vec<Vec3> = (0..=SEGMENTS)
+        .map(|i| {
+            let a = TAU * i as f32 / SEGMENTS as f32;
+            vec3(cx + radius * a.cos(), 0.05, cz + radius * a.sin())
+        })
+        .collect();
+    let n = vertices.len();
+    crate::util::turtle::LineGeometry {
+        colors: vec![color; n],
+        indices: (0..n as u32).collect(),
+        segments: vec![(0, n as u32)],
+        vertices,
+    }
+}
+
 // ── Scene Controller ──
 
 impl std::fmt::Debug for SceneController {
@@ -204,6 +255,8 @@ pub struct SceneController {
     line_segments: Vec<(u32, u32)>,
     mesh_index_count: u32,
     cached_ground: Option<(Vec3, MeshGeometry)>,
+    last_lod_tiers: Vec<u8>,
+    last_debug_camera_pos: Vec3,
 }
 
 impl Default for SceneController {
@@ -218,52 +271,137 @@ impl SceneController {
             line_segments: Vec::new(),
             mesh_index_count: 0,
             cached_ground: None,
+            last_lod_tiers: Vec::new(),
+            last_debug_camera_pos: Vec3::ZERO,
         }
     }
 
     pub fn set_scene(
         &mut self,
         settings: &mut SceneSettings,
+        env: &mut EnvironmentSettings,
+        lod: &LodSettings,
+        camera_pos: Vec3,
         buffers: &SceneBuffers,
         ground_color: Vec3,
+        debug_mode: bool,
     ) -> (Vec<(u32, u32)>, u32) {
         let scene = settings.active_mut();
 
-        if !scene.dirty && !self.line_segments.is_empty() {
+        // Compute per-plant LOD tiers and trigger rebuild if any tier changed
+        let current_tiers: Vec<u8> = scene
+            .plants
+            .iter()
+            .map(|p| lod_tier((Vec3::from(p.position) - camera_pos).length(), lod))
+            .collect();
+
+        if current_tiers != self.last_lod_tiers {
+            scene.dirty = true;
+        }
+
+        // In debug mode, rebuild whenever the camera moves so LOD circles track it.
+        if debug_mode && (camera_pos - self.last_debug_camera_pos).length_squared() > 0.25 {
+            scene.dirty = true;
+        }
+
+        if !scene.dirty && !env.dirty && !self.line_segments.is_empty() {
             return (self.line_segments.clone(), self.mesh_index_count);
         }
         scene.dirty = false;
+        env.dirty = false;
 
         // Forest scene regenerates its plant list from the current seed
         if scene.name == "Forest" {
-            scene.plants = generate_forest_plants(42);
+            scene.plants = generate_forest_plants(env.seed);
         }
-        rng::seed(42);
+
+        rng::seed(env.seed);
 
         let mut line_geos = Vec::new();
         let mut mesh_geos = Vec::new();
 
         let global_age = scene.global_age;
         let global_scale = scene.global_scale;
+        let light_pos = Vec3::from(env.light_position);
+        let tropism_strength = env.tropism_strength;
+        let gravitropism_strength = env.gravitropism_strength;
+        let wind_azimuth = env.wind_azimuth.to_radians();
+        let wind_dir = Vec3::new(wind_azimuth.cos(), 0.0, wind_azimuth.sin());
+        let wind_strength = env.wind_strength;
+        let wind_turbulence = env.wind_turbulence;
+        let taper = env.taper;
+        let growth_factor = season_growth_factor(env.season);
 
         let mut turtle = Turtle::new(Vec3::ZERO, Vec3::ZERO);
+        let mut accumulated_indices: u32 = 6; // ground plane is always 6 indices
 
         for plant in &mut scene.plants {
-            plant.plant.set_age(plant.base_age + global_age);
+            let raw_age = plant.base_age + global_age;
+            let effective_age =
+                ((raw_age as f32 * growth_factor) as u32).min(plant.plant.max_age());
+            plant.plant.set_age(effective_age);
 
             let pos = Vec3::from(plant.position);
             let colour = plant.plant.colour();
             let scale = plant.scale * global_scale;
+            let light_dir = (light_pos - pos).normalize_or_zero();
+            let dist = (pos - camera_pos).length();
+            let base_tier = lod_tier(dist, lod);
 
-            turtle.reset(pos, colour);
-            turtle.set_scale(scale);
+            // LOD budget escalation: if adding this plant would exceed max_indices,
+            // try progressively coarser tiers until it fits or tier 3 (skip mesh) is reached.
+            let mut tier = base_tier;
+            loop {
+                let (lod_segments, lod_min_radius) = lod_params(tier);
 
-            turtle.roll(FRAC_PI_2);
-            turtle.turn(FRAC_PI_2);
-            turtle.roll(plant.rotation.to_radians());
-            turtle.do_actions(plant.plant.actions());
+                turtle.reset(pos, colour);
+                turtle.set_scale(scale);
+                turtle.set_lod(lod_segments, lod_min_radius);
+                turtle.set_tropism(light_dir, tropism_strength);
+                turtle.set_gravitropism(gravitropism_strength);
+                turtle.set_wind(wind_dir, wind_strength, wind_turbulence);
+                turtle.set_taper(taper);
+                turtle.roll(FRAC_PI_2);
+                turtle.turn(FRAC_PI_2);
+                turtle.roll(plant.rotation.to_radians());
+                turtle.do_actions(plant.plant.actions());
+
+                let plant_indices = turtle.mesh_index_count();
+                let fits = lod.max_indices == 0
+                    || accumulated_indices + plant_indices <= lod.max_indices
+                    || tier >= 3;
+
+                if fits {
+                    accumulated_indices += plant_indices;
+                    break;
+                }
+                tier += 1;
+            }
+
             line_geos.push(turtle.line_geometry());
             mesh_geos.push(turtle.mesh_geometry());
+        }
+
+        self.last_lod_tiers = current_tiers;
+
+        // Debug: draw LOD threshold circles centred on the camera
+        if debug_mode {
+            self.last_debug_camera_pos = camera_pos;
+            line_geos.push(lod_circle_geometry(
+                camera_pos,
+                lod.near_threshold,
+                vec3(0.2, 1.0, 0.3),
+            ));
+            line_geos.push(lod_circle_geometry(
+                camera_pos,
+                lod.mid_threshold,
+                vec3(1.0, 1.0, 0.2),
+            ));
+            line_geos.push(lod_circle_geometry(
+                camera_pos,
+                lod.far_threshold,
+                vec3(1.0, 0.3, 0.2),
+            ));
         }
 
         // Add ground plane (cached by colour)

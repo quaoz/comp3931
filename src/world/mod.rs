@@ -6,7 +6,7 @@ use winit::{event::MouseScrollDelta, keyboard::KeyCode};
 use crate::{
     settings::Settings,
     world::{
-        camera::{Camera, CameraController, Projection},
+        camera::{Camera, CameraController, CameraMode, Projection},
         scenes::SceneController,
     },
 };
@@ -46,6 +46,10 @@ impl World {
         self.camera.camera_position()
     }
 
+    pub fn camera_mode(&self) -> &CameraMode {
+        &self.camera.mode
+    }
+
     pub fn apply_settings(&mut self, settings: &Settings) {
         self.camera_controller.set_speed(settings.camera.speed);
         self.camera_controller
@@ -59,6 +63,10 @@ impl World {
 
     pub fn handle_mouse_scroll(&mut self, delta: &MouseScrollDelta) {
         self.camera_controller.process_mouse_scroll(delta);
+    }
+
+    pub fn handle_pinch(&mut self, delta: f64) {
+        self.camera_controller.process_pinch(delta as f32);
     }
 
     pub fn handle_keyboard(&mut self, key: KeyCode, pressed: bool) {

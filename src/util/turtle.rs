@@ -2,7 +2,9 @@ use std::f32::consts::TAU;
 
 use glam::Vec3;
 
-const CYLINDER_SEGMENTS: usize = 8;
+use crate::util::rng;
+
+const DEFAULT_CYLINDER_SEGMENTS: usize = 8;
 
 #[derive(Debug, Clone, Copy)]
 struct PathEntry {
@@ -29,8 +31,15 @@ pub struct Turtle {
     scale: f32,
     heading: Vec3,
     normal: Vec3,
-
+    tropism_direction: Vec3,
+    tropism_strength: f32,
+    gravitropism_strength: f32,
+    wind_direction: Vec3,
+    wind_strength: f32,
+    wind_turbulence: f32,
     taper: f32,
+    lod_segments: usize,
+    lod_min_radius: f32,
     stack: Vec<(usize, Vec3, Vec3)>,
     path_buf: Vec<Vec3>,
     colour_buf: Vec<Vec3>,
@@ -47,8 +56,15 @@ impl Turtle {
             scale: 1.0,
             heading: Vec3::X,
             normal: Vec3::Y,
-
+            tropism_direction: Vec3::Y,
+            tropism_strength: 0.0,
+            gravitropism_strength: 0.0,
+            wind_direction: Vec3::X,
+            wind_strength: 0.0,
+            wind_turbulence: 0.0,
             taper: 1.0,
+            lod_segments: DEFAULT_CYLINDER_SEGMENTS,
+            lod_min_radius: 0.0,
             stack: Vec::new(),
             path_buf: vec![pos],
             colour_buf: vec![colour],
@@ -69,7 +85,15 @@ impl Turtle {
         self.scale = 1.0;
         self.heading = Vec3::X;
         self.normal = Vec3::Y;
+        self.tropism_direction = Vec3::Y;
+        self.tropism_strength = 0.0;
+        self.gravitropism_strength = 0.0;
+        self.wind_direction = Vec3::X;
+        self.wind_strength = 0.0;
+        self.wind_turbulence = 0.0;
         self.taper = 1.0;
+        self.lod_segments = DEFAULT_CYLINDER_SEGMENTS;
+        self.lod_min_radius = 0.0;
         self.stack = Vec::new();
         self.path_buf = vec![pos];
         self.colour_buf = vec![colour];
@@ -139,6 +163,10 @@ impl Turtle {
         self.path_buf
             .push(self.pos() + (distance * self.scale) * self.heading);
         self.path_entries.push(entry);
+        self.apply_tropism_toward(self.tropism_direction, self.tropism_strength);
+        self.apply_tropism_toward(Vec3::Y, self.gravitropism_strength);
+        self.apply_tropism_toward(self.wind_direction, self.wind_strength);
+        self.apply_wind_turbulence();
     }
 
     /// Generate a cylinder mesh and advance the turtle
@@ -146,15 +174,22 @@ impl Turtle {
         let tapered_diameter = diameter * self.taper.powi(self.stack.len() as i32);
         let radius = (tapered_diameter * self.scale) * 0.5;
 
+        // LOD: skip mesh for very thin branches or when segments == 0
+        if self.lod_segments == 0 || (self.lod_min_radius > 0.0 && radius < self.lod_min_radius) {
+            self.travel(length);
+            return;
+        }
+
         let base_pos = self.pos();
         let tip_pos = base_pos + (length * self.scale) * self.heading;
+        let segments = self.lod_segments;
 
         let binormal = self.heading.cross(self.normal).normalize();
         let colour = *self.colour_buf.last().unwrap();
         let base_idx = self.mesh_vertices.len() as u32;
 
-        for i in 0..CYLINDER_SEGMENTS {
-            let angle = (i as f32 / CYLINDER_SEGMENTS as f32) * TAU;
+        for i in 0..segments {
+            let angle = (i as f32 / segments as f32) * TAU;
             let (sin, cos) = angle.sin_cos();
             let radial = cos * self.normal + sin * binormal;
             let offset = radial * radius;
@@ -171,8 +206,8 @@ impl Turtle {
         }
 
         // Generate quad indices for each segment (2 triangles per quad)
-        for i in 0..CYLINDER_SEGMENTS as u32 {
-            let next = (i + 1) % CYLINDER_SEGMENTS as u32;
+        for i in 0..segments as u32 {
+            let next = (i + 1) % segments as u32;
             let b0 = base_idx + i * 2;
             let t0 = base_idx + i * 2 + 1;
             let b1 = base_idx + next * 2;
@@ -266,9 +301,70 @@ impl Turtle {
         self.scale = scale;
     }
 
-    /// Sets the taper ratio applied per branch nesting depth
+    pub fn set_tropism(&mut self, direction: Vec3, strength: f32) {
+        self.tropism_direction = direction;
+        self.tropism_strength = strength;
+    }
+
+    /// Sets the gravitropism strength. Positive values push heading toward +Y
+    /// (negative gravitropism — shoots growing against gravity).
+    pub fn set_gravitropism(&mut self, strength: f32) {
+        self.gravitropism_strength = strength;
+    }
+
+    /// Sets the wind direction (normalised horizontal vector), directional strength,
+    /// and turbulence (max random rotation in radians per travel step).
+    pub fn set_wind(&mut self, direction: Vec3, strength: f32, turbulence: f32) {
+        self.wind_direction = direction;
+        self.wind_strength = strength;
+        self.wind_turbulence = turbulence;
+    }
+
+    /// Sets the taper ratio applied per branch nesting depth.
+    /// `1.0` = uniform width; `0.5` = each level is half the diameter of its parent.
     pub fn set_taper(&mut self, taper: f32) {
         self.taper = taper;
+    }
+
+    /// Set LOD parameters for this turtle.
+    /// `segments` controls cylinder quality (0 = skip mesh generation entirely).
+    /// `min_radius` skips branches thinner than this value (in world units after scale).
+    pub fn set_lod(&mut self, segments: usize, min_radius: f32) {
+        self.lod_segments = segments;
+        self.lod_min_radius = min_radius;
+    }
+
+    /// Apply a random rotation in the plane perpendicular to heading to simulate wind gusts.
+    fn apply_wind_turbulence(&mut self) {
+        if self.wind_turbulence <= 0.0 {
+            return;
+        }
+        let angle = rng::random_range(-self.wind_turbulence, self.wind_turbulence);
+        let roll = rng::random_range(0.0, TAU);
+        let binormal = self.heading.cross(self.normal).normalize_or_zero();
+        let perp = self.normal * roll.cos() + binormal * roll.sin();
+        if perp.length_squared() > 1e-12 {
+            let axis = perp.normalize();
+            self.heading = self.heading.rotate_axis(axis, angle).normalize();
+            self.normal = self.normal.rotate_axis(axis, angle).normalize();
+        }
+    }
+
+    /// Rotate heading toward `direction` by an amount proportional to `strength`
+    /// and the sine of the angle between heading and direction (via cross product).
+    fn apply_tropism_toward(&mut self, direction: Vec3, strength: f32) {
+        if strength <= 0.0 {
+            return;
+        }
+        let torque = self.heading.cross(direction);
+        let torque_len = torque.length();
+        if torque_len < 1e-6 {
+            return;
+        }
+        let axis = torque / torque_len;
+        let angle = strength * torque_len;
+        self.heading = self.heading.rotate_axis(axis, angle).normalize();
+        self.normal = self.normal.rotate_axis(axis, angle).normalize();
     }
 
     /// Extract line geometry data without writing to GPU
@@ -320,6 +416,11 @@ impl Turtle {
             indices,
             segments,
         }
+    }
+
+    /// Number of mesh indices currently accumulated (cheap, no allocation).
+    pub fn mesh_index_count(&self) -> u32 {
+        self.mesh_indices.len() as u32
     }
 
     /// Extract mesh geometry data without writing to GPU
