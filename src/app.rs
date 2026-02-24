@@ -8,7 +8,7 @@ use winit::{
     window::Window,
 };
 
-use crate::state::State;
+use crate::state::{Focus, State};
 
 pub enum AppEvent {
     Start(State),
@@ -86,25 +86,50 @@ impl ApplicationHandler<AppEvent> for App {
         match &event {
             WindowEvent::CloseRequested => {
                 event_loop.exit();
+                return;
             }
             WindowEvent::Resized(new_size) => {
                 state.resize(new_size.width, new_size.height);
             }
             WindowEvent::Focused(focused) => {
-                state.set_cursor_captured(*focused);
+                if !*focused {
+                    state.handle_focus(Focus::Ui);
+                }
             }
             WindowEvent::RedrawRequested => {
                 state.render();
             }
-            WindowEvent::MouseWheel { delta, .. } => {
-                state.handle_mouse_scroll(delta);
-            }
-            WindowEvent::KeyboardInput { event, .. } => {
-                if let PhysicalKey::Code(code) = event.physical_key {
-                    state.handle_key(code, event.state.is_pressed());
-                }
-            }
             _ => {}
+        }
+
+        // forward event if not consumed by ui
+        if !state.handle_input(&event) {
+            match &event {
+                WindowEvent::MouseWheel { delta, .. } => {
+                    state.handle_mouse_scroll(delta);
+                }
+                WindowEvent::KeyboardInput {
+                    event: key_event, ..
+                } => {
+                    if let PhysicalKey::Code(code) = key_event.physical_key {
+                        state.handle_key(code, key_event.state.is_pressed());
+                    }
+                }
+                WindowEvent::MouseInput {
+                    state: winit::event::ElementState::Pressed,
+                    button: winit::event::MouseButton::Left,
+                    ..
+                } => {
+                    // regain focus when click outside of ui
+                    if let Focus::Ui = state.focus {
+                        state.handle_focus(Focus::World);
+                    }
+                }
+                WindowEvent::PinchGesture { delta, .. } => {
+                    state.handle_pinch(*delta);
+                }
+                _ => {}
+            }
         }
     }
 }
