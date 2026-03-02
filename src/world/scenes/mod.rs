@@ -11,7 +11,7 @@ use crate::{
         rng,
         turtle::{MeshGeometry, Turtle, combine_line_geometries, combine_mesh_geometries},
     },
-    world::plants::PlantInstance,
+    world::plants::{PlantEnvironment, PlantInstance},
 };
 
 // ── Hardcoded Scenes ──
@@ -38,7 +38,11 @@ fn big_scene() -> SceneData {
             let z = (z as f32 * spacing) + rng::random_range(-spacing / 2.0, spacing / 2.0);
 
             plants.push(
-                PlantInstance::new(PlantType::Wildflower, 10).with_transform([x, 0.0, z], 5.0, 0.0),
+                PlantInstance::new(PlantType::Wildflower, -10.0).with_transform(
+                    [x, 0.0, z],
+                    5.0,
+                    0.0,
+                ),
             );
         }
     }
@@ -56,12 +60,16 @@ fn garden_scene() -> SceneData {
     SceneData {
         name: "Garden".to_string(),
         plants: vec![
-            PlantInstance::new(PlantType::Tree, 5).with_transform([0.0, 0.0, 0.0], 10.0, 0.0),
-            PlantInstance::new(PlantType::Bush, 4).with_transform([15.0, 0.0, 10.0], 8.0, 45.0),
-            PlantInstance::new(PlantType::Fern, 4).with_transform([-12.0, 0.0, 5.0], 6.0, 120.0),
-            PlantInstance::new(PlantType::Mint, 4).with_transform([8.0, 0.0, -10.0], 7.0, 200.0),
-            PlantInstance::new(PlantType::Tree, 4).with_transform([-8.0, 0.0, -15.0], 12.0, 270.0),
-            PlantInstance::new(PlantType::Wildflower, 5).with_transform(
+            PlantInstance::new(PlantType::Tree, -5.0).with_transform([0.0, 0.0, 0.0], 10.0, 0.0),
+            PlantInstance::new(PlantType::Bush, -4.0).with_transform([15.0, 0.0, 10.0], 8.0, 45.0),
+            PlantInstance::new(PlantType::Fern, -4.0).with_transform([-12.0, 0.0, 5.0], 6.0, 120.0),
+            PlantInstance::new(PlantType::Mint, -4.0).with_transform([8.0, 0.0, -10.0], 7.0, 200.0),
+            PlantInstance::new(PlantType::Tree, -4.0).with_transform(
+                [-8.0, 0.0, -15.0],
+                12.0,
+                270.0,
+            ),
+            PlantInstance::new(PlantType::Wildflower, -5.0).with_transform(
                 [5.0, 0.0, -5.0],
                 5.0,
                 90.0,
@@ -77,26 +85,46 @@ fn meadow_scene() -> SceneData {
     SceneData {
         name: "Meadow".to_string(),
         plants: vec![
-            PlantInstance::new(PlantType::Wildflower, 5).with_transform([0.0, 0.0, 0.0], 5.0, 0.0),
-            PlantInstance::new(PlantType::Wildflower, 4).with_transform(
+            PlantInstance::new(PlantType::Wildflower, -5.0).with_transform(
+                [0.0, 0.0, 0.0],
+                5.0,
+                0.0,
+            ),
+            PlantInstance::new(PlantType::Wildflower, -4.0).with_transform(
                 [-8.0, 0.0, 6.0],
                 6.0,
                 45.0,
             ),
-            PlantInstance::new(PlantType::Wildflower, 6).with_transform(
+            PlantInstance::new(PlantType::Wildflower, -6.0).with_transform(
                 [10.0, 0.0, -4.0],
                 4.0,
                 90.0,
             ),
-            PlantInstance::new(PlantType::Lychnis, 4).with_transform(
+            PlantInstance::new(PlantType::Lychnis, -4.0).with_transform(
                 [-5.0, 0.0, -10.0],
                 8.0,
                 135.0,
             ),
-            PlantInstance::new(PlantType::Lychnis, 3).with_transform([7.0, 0.0, 8.0], 7.0, 180.0),
-            PlantInstance::new(PlantType::Carrot, 4).with_transform([-12.0, 0.0, -3.0], 6.0, 225.0),
-            PlantInstance::new(PlantType::Carrot, 3).with_transform([3.0, 0.0, 12.0], 7.0, 270.0),
-            PlantInstance::new(PlantType::Capsella, 4).with_transform([15.0, 0.0, 5.0], 5.0, 315.0),
+            PlantInstance::new(PlantType::Lychnis, -3.0).with_transform(
+                [7.0, 0.0, 8.0],
+                7.0,
+                180.0,
+            ),
+            PlantInstance::new(PlantType::Carrot, -4.0).with_transform(
+                [-12.0, 0.0, -3.0],
+                6.0,
+                225.0,
+            ),
+            PlantInstance::new(PlantType::Carrot, -3.0).with_transform(
+                [3.0, 0.0, 12.0],
+                7.0,
+                270.0,
+            ),
+            PlantInstance::new(PlantType::Capsella, -4.0).with_transform(
+                [15.0, 0.0, 5.0],
+                5.0,
+                315.0,
+            ),
         ],
         global_scale: 1.0,
         global_age: 0,
@@ -108,13 +136,29 @@ fn botanical_scene() -> SceneData {
     SceneData {
         name: "Botanical".to_string(),
         plants: vec![
-            PlantInstance::new(PlantType::Capsella, 5).with_transform([-20.0, 0.0, 0.0], 8.0, 0.0),
-            PlantInstance::new(PlantType::Mint, 5).with_transform([-10.0, 0.0, 0.0], 7.0, 30.0),
-            PlantInstance::new(PlantType::Lychnis, 4).with_transform([0.0, 0.0, 0.0], 9.0, 60.0),
-            PlantInstance::new(PlantType::Mycelis, 5).with_transform([10.0, 0.0, 0.0], 8.0, 90.0),
-            PlantInstance::new(PlantType::Carrot, 4).with_transform([20.0, 0.0, 0.0], 7.0, 120.0),
-            PlantInstance::new(PlantType::Fern, 5).with_transform([-5.0, 0.0, -15.0], 8.0, 150.0),
-            PlantInstance::new(PlantType::Bush, 4).with_transform([5.0, 0.0, -15.0], 7.0, 180.0),
+            PlantInstance::new(PlantType::Capsella, -5.0).with_transform(
+                [-20.0, 0.0, 0.0],
+                8.0,
+                0.0,
+            ),
+            PlantInstance::new(PlantType::Mint, -5.0).with_transform([-10.0, 0.0, 0.0], 7.0, 30.0),
+            PlantInstance::new(PlantType::Lychnis, -4.0).with_transform([0.0, 0.0, 0.0], 9.0, 60.0),
+            PlantInstance::new(PlantType::Mycelis, -5.0).with_transform(
+                [10.0, 0.0, 0.0],
+                8.0,
+                90.0,
+            ),
+            PlantInstance::new(PlantType::Carrot, -4.0).with_transform(
+                [20.0, 0.0, 0.0],
+                7.0,
+                120.0,
+            ),
+            PlantInstance::new(PlantType::Fern, -5.0).with_transform(
+                [-5.0, 0.0, -15.0],
+                8.0,
+                150.0,
+            ),
+            PlantInstance::new(PlantType::Bush, -4.0).with_transform([5.0, 0.0, -15.0], 7.0, 180.0),
         ],
         global_scale: 1.0,
         global_age: 0,
@@ -145,11 +189,11 @@ fn generate_forest_plants(seed: u64) -> Vec<PlantInstance> {
         .map(|_| {
             let x = rng::random_range(-40.0, 40.0);
             let z = rng::random_range(-40.0, 40.0);
-            let age = 3 + (rng::random_range(0.0, 3.5) as u32);
+            let age = 3.0 + (rng::random_range(0.0, 3.5));
             let scale = rng::random_range(8.0, 16.0);
             let rotation = rng::random_range(0.0, 360.0);
             let idx = (rng::random_range(0.0, types.len() as f32) as usize).min(types.len() - 1);
-            PlantInstance::new(types[idx], age).with_transform([x, 0.0, z], scale, rotation)
+            PlantInstance::new(types[idx], -age).with_transform([x, 0.0, z], scale, rotation)
         })
         .collect()
 }
@@ -171,26 +215,22 @@ pub struct SceneBuffers<'a> {
 
 const GROUND_SIZE: f32 = 200.0;
 
-fn ground_geometry(color: Vec3) -> MeshGeometry {
-    let y = 0.0;
-    let half = GROUND_SIZE;
+fn ground_geometry(colour: Vec3) -> MeshGeometry {
+    let e = GROUND_SIZE;
     let normal = Vec3::Y;
-
     let vertices = vec![
-        Vec3::new(-half, y, -half),
-        Vec3::new(half, y, -half),
-        Vec3::new(-half, y, half),
-        Vec3::new(half, y, half),
+        Vec3::new(-e, 0.0, -e),
+        Vec3::new(e, 0.0, -e),
+        Vec3::new(-e, 0.0, e),
+        Vec3::new(e, 0.0, e),
     ];
-    let normals = vec![normal; 4];
-    let colors = vec![color; 4];
-    let indices = vec![0, 2, 1, 1, 2, 3];
-
     MeshGeometry {
+        normals: vec![normal; 4],
+        colours: vec![colour; 4],
+        indices: vec![0, 2, 1, 1, 2, 3],
+        uvs: vec![[-1.0f32, -1.0]; 4],
+        tangents: vec![Vec3::ZERO; 4],
         vertices,
-        normals,
-        colors,
-        indices,
     }
 }
 
@@ -235,8 +275,9 @@ fn lod_circle_geometry(
         })
         .collect();
     let n = vertices.len();
+
     crate::util::turtle::LineGeometry {
-        colors: vec![color; n],
+        colours: vec![color; n],
         indices: (0..n as u32).collect(),
         segments: vec![(0, n as u32)],
         vertices,
@@ -292,7 +333,7 @@ impl SceneController {
         let current_tiers: Vec<u8> = scene
             .plants
             .iter()
-            .map(|p| lod_tier((Vec3::from(p.position) - camera_pos).length(), lod))
+            .map(|p| lod_tier((p.position - camera_pos).length(), lod))
             .collect();
 
         if current_tiers != self.last_lod_tiers {
@@ -335,13 +376,15 @@ impl SceneController {
         let mut turtle = Turtle::new(Vec3::ZERO, Vec3::ZERO);
         let mut accumulated_indices: u32 = 6; // ground plane is always 6 indices
 
-        for plant in &mut scene.plants {
-            let raw_age = plant.base_age + global_age;
-            let effective_age =
-                ((raw_age as f32 * growth_factor) as u32).min(plant.plant.max_age());
-            plant.plant.set_age(effective_age);
+        let env = PlantEnvironment { season: env.season };
 
-            let pos = Vec3::from(plant.position);
+        for plant in &mut scene.plants {
+            let raw_age = plant.plant.iteration() + global_age;
+            let effective_age =
+                ((raw_age as f32 * growth_factor) as u32).min(plant.plant.max_iterations());
+            plant.plant.set_iteration(effective_age);
+
+            let pos = plant.position;
             let colour = plant.plant.colour();
             let scale = plant.scale * global_scale;
             let light_dir = (light_pos - pos).normalize_or_zero();
@@ -364,7 +407,7 @@ impl SceneController {
                 turtle.roll(FRAC_PI_2);
                 turtle.turn(FRAC_PI_2);
                 turtle.roll(plant.rotation.to_radians());
-                turtle.do_actions(plant.plant.actions());
+                turtle.do_actions(plant.plant.actions(&env));
 
                 let plant_indices = turtle.mesh_index_count();
                 let fits = lod.max_indices == 0
@@ -426,7 +469,7 @@ impl SceneController {
             buffers.queue.write_buffer(
                 buffers.line_color,
                 0,
-                bytemuck::cast_slice(&combined_lines.colors),
+                bytemuck::cast_slice(&combined_lines.colours),
             );
             buffers.queue.write_buffer(
                 buffers.line_index,
@@ -450,7 +493,7 @@ impl SceneController {
             buffers.queue.write_buffer(
                 buffers.mesh_color,
                 0,
-                bytemuck::cast_slice(&combined_mesh.colors),
+                bytemuck::cast_slice(&combined_mesh.colours),
             );
             buffers.queue.write_buffer(
                 buffers.mesh_index,

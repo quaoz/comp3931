@@ -10,58 +10,59 @@ pub mod wildflower;
 
 use glam::Vec3;
 
-use crate::{
-    settings::PlantType,
-    util::{
-        lsystem::{Symbol, SymbolType},
-        turtle::Action,
-    },
-};
+use crate::{settings::PlantType, util::turtle::Action};
 
-// ── Shared symbol type used by tree and bush ──
-
-#[derive(Debug, PartialEq, Copy, Clone)]
-pub(crate) enum PlantSymbol {
-    X,
-    F,
-    Right(f32),
-    Left(f32),
-    Roll(f32),
-    Push,
-    Pop,
+/// Age-based bark colour, interpolating from `young` to `old` over `max_age` years.
+pub fn lerp_bark_colour(age: u32, max_age: f32, young: Vec3, old: Vec3) -> Vec3 {
+    young.lerp(old, (age as f32 / max_age).min(1.0))
 }
 
-impl Symbol for PlantSymbol {
-    fn symbol_type(&self) -> SymbolType {
-        match self {
-            PlantSymbol::X | PlantSymbol::F => SymbolType::NonTerminal,
-            _ => SymbolType::Terminal,
-        }
+/// Seasonal dormancy factor in `[0, max_dormancy]`.
+///
+/// Onset mid-autumn (season ≈ 0.50), full dormancy by mid-winter (0.82),
+/// partial recovery late-winter (0.90), fully recovered at spring (1.0 ≡ 0.0).
+/// `offset` is a per-plant phase shift in (−0.05, +0.05) that staggers onset
+/// and recovery across individuals of the same species.
+pub fn dormancy_factor(season: f32, offset: f32, max_dormancy: f32) -> f32 {
+    const ONSET: f32 = 0.50;
+    const FULL: f32 = 0.82;
+    const RECOVER: f32 = 0.90;
+    let s = (season + offset).rem_euclid(1.0);
+    if s < ONSET {
+        0.0
+    } else if s < FULL {
+        let t = (s - ONSET) / (FULL - ONSET);
+        max_dormancy * t * t * (3.0 - 2.0 * t)
+    } else if s < RECOVER {
+        max_dormancy
+    } else {
+        let t = (s - RECOVER) / (1.0 - RECOVER);
+        max_dormancy * (1.0 - t * t * (3.0 - 2.0 * t))
     }
 }
 
-impl From<PlantSymbol> for Action {
-    fn from(val: PlantSymbol) -> Self {
-        match val {
-            PlantSymbol::X => Action::Nop,
-            PlantSymbol::F => Action::Branch(0.1, 0.02),
-            PlantSymbol::Right(a) => Action::Turn(a),
-            PlantSymbol::Left(a) => Action::Turn(-a),
-            PlantSymbol::Roll(a) => Action::Roll(a),
-            PlantSymbol::Push => Action::Push,
-            PlantSymbol::Pop => Action::Pop,
-        }
-    }
+// ── Environment ──
+
+/// Environmental context passed to each plant during geometry generation.
+/// Seasonal and other ambient properties are read directly from here so
+/// plants can express them as L-system rules rather than cached scalar fields.
+#[derive(Debug, Clone, Copy)]
+pub struct PlantEnvironment {
+    /// Fractional season in [0, 1): 0 = spring, 0.25 = summer, 0.5 = autumn, 0.75 = winter.
+    pub season: f32,
 }
 
 // ── Plant trait ──
 
 pub trait Plant: Send {
     fn plant_type(&self) -> PlantType;
-    fn age(&self) -> u32;
-    fn max_age(&self) -> u32;
-    fn set_age(&mut self, age: u32);
-    fn actions(&mut self) -> &[Action];
+    fn iteration(&self) -> u32;
+    fn max_iterations(&self) -> u32;
+    fn set_iteration(&mut self, iteration: u32);
+    fn actions(&mut self, env: &PlantEnvironment) -> &[Action];
+
+    /// Draw plant-specific UI controls. Returns true if the scene needs to be rebuilt.
+    fn ui(&mut self, ui: &mut egui::Ui) -> bool;
     fn colour(&self) -> Vec3;
     fn clone_boxed(&self) -> Box<dyn Plant>;
 }
@@ -69,26 +70,28 @@ pub trait Plant: Send {
 // ── PlantInstance wrapper ──
 
 pub struct PlantInstance {
-    pub position: [f32; 3],
+    pub position: Vec3,
     pub scale: f32,
     pub rotation: f32,
-    pub base_age: u32,
+    /// Random delay in years before this plant starts growing. The plant's
+    /// effective iteration is computed from `(scene_total_years - delay_years).max(0)`.
+    pub delay_years: f32,
     pub plant: Box<dyn Plant>,
 }
 
 impl PlantInstance {
-    pub fn new(plant_type: PlantType, age: u32) -> Self {
+    pub fn new(plant_type: PlantType, delay_years: f32) -> Self {
         Self {
-            position: [0.0, 0.0, 0.0],
+            position: Vec3::ZERO,
             scale: 1.0,
             rotation: 0.0,
-            base_age: age,
-            plant: create_plant(plant_type, age),
+            delay_years,
+            plant: create_plant(plant_type),
         }
     }
 
-    pub fn with_transform(mut self, position: [f32; 3], scale: f32, rotation: f32) -> Self {
-        self.position = position;
+    pub fn with_transform(mut self, position: impl Into<Vec3>, scale: f32, rotation: f32) -> Self {
+        self.position = position.into();
         self.scale = scale;
         self.rotation = rotation;
         self
@@ -101,7 +104,7 @@ impl Clone for PlantInstance {
             position: self.position,
             scale: self.scale,
             rotation: self.rotation,
-            base_age: self.base_age,
+            delay_years: self.delay_years,
             plant: self.plant.clone_boxed(),
         }
     }
@@ -111,7 +114,7 @@ impl std::fmt::Debug for PlantInstance {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("PlantInstance")
             .field("plant_type", &self.plant.plant_type())
-            .field("base_age", &self.base_age)
+            .field("delay_years", &self.delay_years)
             .field("position", &self.position)
             .field("scale", &self.scale)
             .field("rotation", &self.rotation)
@@ -119,16 +122,16 @@ impl std::fmt::Debug for PlantInstance {
     }
 }
 
-fn create_plant(plant_type: PlantType, age: u32) -> Box<dyn Plant> {
+fn create_plant(plant_type: PlantType) -> Box<dyn Plant> {
     match plant_type {
-        PlantType::Tree => Box::new(tree::TreePlant::new(age)),
-        PlantType::Bush => Box::new(bush::BushPlant::new(age)),
-        PlantType::Fern => Box::new(fern::FernPlant::new(age)),
-        PlantType::Wildflower => Box::new(wildflower::WildflowerPlant::new(age)),
-        PlantType::Capsella => Box::new(capsella::CapsellaPant::new(age)),
-        PlantType::Mint => Box::new(mint::MintPlant::new(age)),
-        PlantType::Lychnis => Box::new(lychnis::LychnisPant::new(age)),
-        PlantType::Mycelis => Box::new(mycelis::MycelisPlant::new(age)),
-        PlantType::Carrot => Box::new(carrot::CarrotPlant::new(age)),
+        PlantType::Tree => Box::new(tree::TreePlant::new()),
+        PlantType::Bush => Box::new(bush::BushPlant::new()),
+        PlantType::Fern => Box::new(fern::FernPlant::new()),
+        PlantType::Wildflower => Box::new(wildflower::WildflowerPlant::new()),
+        PlantType::Capsella => Box::new(capsella::CapsellaPlant::new()),
+        PlantType::Mint => Box::new(mint::MintPlant::new()),
+        PlantType::Lychnis => Box::new(lychnis::LychnisPlant::new()),
+        PlantType::Mycelis => Box::new(mycelis::MycelisPlant::new()),
+        PlantType::Carrot => Box::new(carrot::CarrotPlant::new()),
     }
 }

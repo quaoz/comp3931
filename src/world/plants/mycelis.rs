@@ -15,25 +15,61 @@ use crate::{
         rng,
         turtle::Action,
     },
-    world::plants::Plant,
+    world::plants::{Plant, PlantEnvironment},
 };
 
-const STEM_COLOUR: Vec3 = vec3(0.4, 0.6, 0.2);
-const FLOWER_COLOUR: Vec3 = vec3(0.9, 0.85, 0.1);
+#[derive(Clone)]
+pub struct MycelisParams {
+    pub stem_colour: Vec3,
+    pub flower_colour: Vec3,
+    pub branch_radius: f32,
+    pub flower_size: f32,
+    pub branch_angle_deg: f32,
+    pub i_init: f32,
+    pub max_iterations: u32,
+}
+
+impl Default for MycelisParams {
+    fn default() -> Self {
+        Self {
+            stem_colour: vec3(0.4, 0.6, 0.2),
+            flower_colour: vec3(0.9, 0.85, 0.1),
+            branch_radius: 0.005,
+            flower_size: 0.04,
+            branch_angle_deg: 30.0,
+            i_init: 0.10,
+            max_iterations: 1000,
+        }
+    }
+}
 
 pub struct MycelisPlant {
-    age: u32,
+    iteration: u32,
     dirty: bool,
     cached_actions: Vec<Action>,
+    pub params: MycelisParams,
+    last_season: f32,
+    dormancy_offset: f32,
+}
+
+impl Default for MycelisPlant {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl MycelisPlant {
-    pub fn new(age: u32) -> Self {
-        let actions = generate(age);
+    pub fn new() -> Self {
+        let params = MycelisParams::default();
+        let dormancy_offset = rng::random_range(-0.05_f32, 0.05);
+        let actions = generate(0, &params, 0.25, dormancy_offset);
         Self {
-            age,
+            iteration: 0,
             dirty: false,
             cached_actions: actions,
+            params,
+            last_season: 0.25,
+            dormancy_offset,
         }
     }
 }
@@ -43,32 +79,129 @@ impl Plant for MycelisPlant {
         PlantType::Mycelis
     }
 
-    fn age(&self) -> u32 {
-        self.age
+    fn iteration(&self) -> u32 {
+        self.iteration
     }
 
-    fn max_age(&self) -> u32 {
-        8
+    fn max_iterations(&self) -> u32 {
+        self.params.max_iterations
     }
 
-    fn set_age(&mut self, age: u32) {
-        if self.age != age {
-            self.age = age;
+    fn set_iteration(&mut self, iteration: u32) {
+        if self.iteration != iteration {
+            self.iteration = iteration;
             self.dirty = true;
         }
     }
 
     fn colour(&self) -> Vec3 {
-        STEM_COLOUR
+        self.params.stem_colour
+    }
+
+    fn ui(&mut self, ui: &mut egui::Ui) -> bool {
+        let mut changed = false;
+        let p = &mut self.params;
+
+        egui::Grid::new("mycelis_params")
+            .num_columns(2)
+            .spacing([8.0, 4.0])
+            .show(ui, |ui| {
+                ui.label("Max iterations");
+                let mut a = p.max_iterations as i32;
+                if ui
+                    .add(egui::DragValue::new(&mut a).range(1..=100))
+                    .changed()
+                {
+                    p.max_iterations = a as u32;
+                    changed = true;
+                }
+                ui.end_row();
+
+                ui.label("Branch angle");
+                if ui
+                    .add(egui::Slider::new(&mut p.branch_angle_deg, 5.0..=60.0).suffix("°"))
+                    .changed()
+                {
+                    changed = true;
+                }
+                ui.end_row();
+
+                ui.label("Internode length");
+                if ui
+                    .add(egui::Slider::new(&mut p.i_init, 0.02..=0.3).max_decimals(3))
+                    .changed()
+                {
+                    changed = true;
+                }
+                ui.end_row();
+
+                ui.label("Branch radius");
+                if ui
+                    .add(egui::Slider::new(&mut p.branch_radius, 0.001..=0.03).max_decimals(4))
+                    .changed()
+                {
+                    changed = true;
+                }
+                ui.end_row();
+
+                ui.label("Flower size");
+                if ui
+                    .add(egui::Slider::new(&mut p.flower_size, 0.005..=0.12).max_decimals(3))
+                    .changed()
+                {
+                    changed = true;
+                }
+                ui.end_row();
+
+                ui.label("Stem colour");
+                let mut rgb = p.stem_colour.to_array();
+                if ui.color_edit_button_rgb(&mut rgb).changed() {
+                    p.stem_colour = Vec3::from(rgb);
+                    changed = true;
+                }
+                ui.end_row();
+
+                ui.label("Flower colour");
+                let mut rgb = p.flower_colour.to_array();
+                if ui.color_edit_button_rgb(&mut rgb).changed() {
+                    p.flower_colour = Vec3::from(rgb);
+                    changed = true;
+                }
+                ui.end_row();
+            });
+
+        if ui.button("Reset").clicked() {
+            self.params = MycelisParams::default();
+            changed = true;
+        }
+        if changed {
+            self.dirty = true;
+        }
+        changed
     }
 
     fn clone_boxed(&self) -> Box<dyn Plant> {
-        Box::new(Self::new(self.age))
+        let mut p = Self::new();
+        p.params = self.params.clone();
+        p.iteration = self.iteration;
+        p.last_season = self.last_season;
+        p.dormancy_offset = self.dormancy_offset;
+        p.dirty = true;
+        Box::new(p)
     }
 
-    fn actions(&mut self) -> &[Action] {
+    fn actions(&mut self, env: &PlantEnvironment) -> &[Action] {
+        if (env.season - self.last_season).abs() > 0.02 {
+            self.dirty = true;
+        }
         if self.dirty {
-            self.cached_actions = generate(self.age);
+            self.cached_actions = generate(
+                self.iteration,
+                &self.params,
+                env.season,
+                self.dormancy_offset,
+            );
+            self.last_season = env.season;
             self.dirty = false;
         }
         &self.cached_actions
@@ -156,10 +289,10 @@ impl Display for Mys {
     }
 }
 
-fn generate(age: u32) -> Vec<Action> {
-    let branch_angle = 28.0f32.to_radians();
-    let i_init = 0.07f32;
-
+fn generate(age: u32, p: &MycelisParams, season: f32, dormancy_offset: f32) -> Vec<Action> {
+    const MAX_DORMANCY: f32 = 0.65;
+    let age = (age as f32 * (1.0 - super::dormancy_factor(season, dormancy_offset, MAX_DORMANCY)))
+        .round() as u32;
     use Mys::*;
 
     const GREEN: Vec3 = vec3(0.07, 0.1, 0.07);
@@ -169,14 +302,14 @@ fn generate(age: u32) -> Vec<Action> {
     let rule_1 = Rule::ContextSensitive(A(0), Some(S), None, &[
         T,
         V,
-        Colour(FLOWER_COLOUR),
+        Colour(p.flower_colour),
         K(FLOWER_MAX),
         Colour(GREEN),
     ]);
     let rule_2 = Rule::ContextSensitive(A(0), Some(V), None, &[
         T,
         V,
-        Colour(FLOWER_COLOUR),
+        Colour(p.flower_colour),
         K(FLOWER_MAX),
         Colour(GREEN),
     ]);
@@ -197,7 +330,7 @@ fn generate(age: u32) -> Vec<Action> {
             out.extend([
                 M,
                 Push,
-                Turn(FRAC_PI_8 + branch_angle),
+                Turn(FRAC_PI_8 + p.branch_angle_deg.to_radians()),
                 Leaf,
                 Turn(-FRAC_PI_8),
                 G,
@@ -260,28 +393,28 @@ fn generate(age: u32) -> Vec<Action> {
         .flat_map(|&s| {
             if let K(c) = s {
                 let (scale, colour) = match c {
-                    6 | 5 => (1.0, FLOWER_COLOUR),
-                    4 | 3 => (0.8, FLOWER_COLOUR),
+                    6 | 5 => (1.0, p.flower_colour),
+                    4 | 3 => (0.8, p.flower_colour),
                     2 | 1 => (0.8, vec3(0.8, 0.3, 0.1)),
                     0 => (0.5, vec3(0.4, 0.2, 0.05)),
-                    _ => (0.5, FLOWER_COLOUR),
+                    _ => (0.5, p.flower_colour),
                 };
 
                 vec![
                     Action::Colour(colour),
-                    Action::Leaf(scale * 0.03, scale * 0.03),
+                    Action::Leaf(scale * p.flower_size, scale * p.flower_size),
                     Action::Colour(GREEN),
                 ]
             } else if Leaf == s {
                 vec![
-                    Action::Colour(STEM_COLOUR),
+                    Action::Colour(p.stem_colour),
                     Action::Leaf(0.02, 0.08),
-                    Action::Colour(STEM_COLOUR),
+                    Action::Colour(p.stem_colour),
                 ]
             } else {
                 vec![match s {
-                    G | F => Action::Branch(i_init, 0.02),
-                    M => Action::Colour(STEM_COLOUR),
+                    G | F => Action::Branch(p.i_init, p.branch_radius),
+                    M => Action::Colour(p.stem_colour),
                     S => Action::Colour(PURPLE),
                     T | W | V => Action::Colour(GREEN),
                     Turn(a) => Action::Turn(a),

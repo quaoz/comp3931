@@ -253,12 +253,6 @@ fn plant_list_ui(ui: &mut egui::Ui, settings: &mut Settings) {
                 .num_columns(2)
                 .striped(true)
                 .show(ui, |ui| {
-                    ui.label("Age");
-                    dirty |= ui
-                        .add(Slider::new(&mut plant.base_age, 0..=plant.plant.max_age()))
-                        .changed();
-                    ui.end_row();
-
                     ui.label("Scale");
                     dirty |= ui
                         .add(Slider::new(&mut plant.scale, 0.1..=50.0).logarithmic(true))
@@ -298,7 +292,7 @@ fn plant_list_ui(ui: &mut egui::Ui, settings: &mut Settings) {
                     ui.end_row();
                 });
 
-            // TODO: pre plant ui
+            dirty |= plant.plant.ui(ui);
 
             if ui.button("Remove").clicked() {
                 remove_idx = Some(i);
@@ -329,7 +323,7 @@ fn plant_list_ui(ui: &mut egui::Ui, settings: &mut Settings) {
             .scene
             .active_mut()
             .plants
-            .push(PlantInstance::new(plant_type, 4));
+            .push(PlantInstance::new(plant_type, 0f32));
         settings.scene.active_mut().dirty = true;
     }
 }
