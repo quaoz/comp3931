@@ -146,6 +146,7 @@ pub struct CameraController {
     speed: f32,
     sensitivity: f32,
     sprint: bool,
+    auto_orbit_speed: f32,
 }
 
 impl CameraController {
@@ -163,6 +164,7 @@ impl CameraController {
             sprint: false,
             speed,
             sensitivity,
+            auto_orbit_speed: 0.0,
         }
     }
 
@@ -172,6 +174,10 @@ impl CameraController {
 
     pub fn set_sensitivity(&mut self, sensitivity: f32) {
         self.sensitivity = sensitivity;
+    }
+
+    pub fn set_auto_orbit_speed(&mut self, speed: f32) {
+        self.auto_orbit_speed = speed;
     }
 
     pub fn process_keyboard(&mut self, key: KeyCode, pressed: bool) -> bool {
@@ -226,10 +232,13 @@ impl CameraController {
         self.scroll -= delta * 20.0;
     }
 
-    pub fn update_camera(&mut self, camera: &mut Camera, dt: Duration) {
+    /// Update camera state. Returns a FOV delta (degrees) to be applied by the caller.
+    /// In FPS mode scroll zooms via FOV; in Orbit mode scroll changes distance.
+    pub fn update_camera(&mut self, camera: &mut Camera, dt: Duration) -> f32 {
+        let dt_secs = dt.as_secs_f32();
         match &mut camera.mode {
             CameraMode::Fps => {
-                let dt = dt.as_secs_f32();
+                let dt = dt_secs;
                 let speed = if self.sprint {
                     self.speed * 2.0
                 } else {
@@ -242,13 +251,6 @@ impl CameraController {
                 camera.position +=
                     forward * (self.amount_forward - self.amount_backward) * speed * dt;
                 camera.position += right * (self.amount_right - self.amount_left) * speed * dt;
-
-                let (pitch_sin, pitch_cos) = camera.pitch.sin_cos();
-                let scrollward =
-                    Vec3::new(pitch_cos * yaw_cos, pitch_sin, pitch_cos * yaw_sin).normalize();
-                camera.position += scrollward * self.scroll * speed;
-                self.scroll = 0.0;
-
                 camera.position.y += (self.amount_up - self.amount_down) * speed * dt;
 
                 camera.yaw += self.rotate_horizontal * self.sensitivity;
@@ -257,6 +259,11 @@ impl CameraController {
                 self.rotate_vertical = 0.0;
 
                 camera.pitch = camera.pitch.clamp(-SAFE_FRAC_PI_2, SAFE_FRAC_PI_2);
+
+                // Scroll → FOV delta (positive scroll = zoom in = smaller FOV)
+                let fov_delta = self.scroll * 3.0;
+                self.scroll = 0.0;
+                fov_delta
             }
             CameraMode::Orbit {
                 azimuth,
@@ -265,12 +272,14 @@ impl CameraController {
                 ..
             } => {
                 *azimuth += self.rotate_horizontal * self.sensitivity * 3.0;
+                *azimuth += self.auto_orbit_speed * dt_secs;
                 *elevation = (*elevation - self.rotate_vertical * self.sensitivity * 3.0)
                     .clamp(0.05, SAFE_FRAC_PI_2);
                 *distance = (*distance + self.scroll * self.speed * 0.3).max(1.0);
                 self.rotate_horizontal = 0.0;
                 self.rotate_vertical = 0.0;
                 self.scroll = 0.0;
+                0.0
             }
         }
     }

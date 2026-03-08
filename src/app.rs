@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{sync::Arc, time::Instant};
 
 use winit::{
     application::ApplicationHandler,
@@ -17,11 +17,16 @@ pub enum AppEvent {
 pub struct App {
     proxy: EventLoopProxy<AppEvent>,
     state: Option<State>,
+    last_render_time: Instant,
 }
 
 impl App {
     pub fn new(proxy: EventLoopProxy<AppEvent>) -> Self {
-        Self { proxy, state: None }
+        Self {
+            proxy,
+            state: None,
+            last_render_time: Instant::now(),
+        }
     }
 }
 
@@ -97,12 +102,14 @@ impl ApplicationHandler<AppEvent> for App {
                 }
             }
             WindowEvent::RedrawRequested => {
-                state.render();
+                let dt = self.last_render_time.elapsed();
+                self.last_render_time = Instant::now();
+                state.render(dt);
             }
             _ => {}
         }
 
-        // forward event if not consumed by ui
+        // Forward event if not consumed by ui
         if !state.handle_input(&event) {
             match &event {
                 WindowEvent::MouseWheel { delta, .. } => {
@@ -120,7 +127,7 @@ impl ApplicationHandler<AppEvent> for App {
                     button: winit::event::MouseButton::Left,
                     ..
                 } => {
-                    // regain focus when click outside of ui
+                    // Regain focus when click outside of ui
                     if let Focus::Ui = state.focus {
                         state.handle_focus(Focus::World);
                     }

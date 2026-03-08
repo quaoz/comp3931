@@ -405,6 +405,7 @@ dependencies = [
  "egui-winit",
  "env_logger",
  "glam",
+ "image",
  "log",
  "pollster",
  "rand",

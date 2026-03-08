@@ -62,7 +62,7 @@
               inherit root;
               fileset = lib.fileset.unions [
                 (craneLib.fileset.commonCargoSources root)
-                (lib.fileset.fileFilter (file: file.hasExt "wgsl") root)
+                ./assets
               ];
             };
           };

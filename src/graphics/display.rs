@@ -1,12 +1,13 @@
 use std::sync::Arc;
 
+use wgpu::TextureFormat;
 use winit::window::Window;
 
 #[derive(Debug)]
 pub struct Display {
     window: Arc<Window>,
     surface: wgpu::Surface<'static>,
-    pub surface_config: wgpu::SurfaceConfiguration,
+    surface_config: wgpu::SurfaceConfiguration,
     is_surface_configured: bool,
     pub adapter: wgpu::Adapter,
     pub device: wgpu::Device,
@@ -15,18 +16,18 @@ pub struct Display {
 
 impl Display {
     pub async fn new(window: Arc<Window>) -> anyhow::Result<Display> {
-        // create wgpu instance
+        // Create wgpu instance
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
             backends: wgpu::Backends::all().with_env(),
             ..Default::default()
         });
 
-        // create surface from window
+        // Create surface from window
         let surface = instance
             .create_surface(window.clone())
             .expect("Failed to create surface");
 
-        // create logical device and command queue
+        // Create logical device and command queue
         let adapter = wgpu::util::initialize_adapter_from_env_or_default(&instance, Some(&surface))
             .await
             .expect("Failed to find suitable adapter");
@@ -42,7 +43,7 @@ impl Display {
             .await
             .expect("Failed to create device");
 
-        // configure surface
+        // Configure surface
         let surface_caps = surface.get_capabilities(&adapter);
         let format = surface_caps
             .formats
@@ -57,7 +58,7 @@ impl Display {
             format,
             width: size.width,
             height: size.height,
-            present_mode: wgpu::PresentMode::AutoVsync, // TODO: make setting
+            present_mode: wgpu::PresentMode::AutoVsync,
             alpha_mode: surface_caps.alpha_modes[0],
             view_formats: vec![],
             desired_maximum_frame_latency: 2,
@@ -92,6 +93,10 @@ impl Display {
         (self.surface_config.width, self.surface_config.height)
     }
 
+    pub fn format(&self) -> TextureFormat {
+        self.surface_config.format
+    }
+
     pub fn surface(&self) -> &wgpu::Surface<'static> {
         &self.surface
     }
@@ -101,16 +106,17 @@ impl Display {
     }
 
     pub fn set_vsync(&mut self, vsync: bool) {
-        let mode = if vsync {
+        let new_mode = if vsync {
             wgpu::PresentMode::AutoVsync
         } else {
             wgpu::PresentMode::AutoNoVsync
         };
-        if self.surface_config.present_mode != mode {
-            self.surface_config.present_mode = mode;
-            if self.is_surface_configured {
-                self.surface.configure(&self.device, &self.surface_config);
-            }
+        if self.surface_config.present_mode == new_mode {
+            return;
+        }
+        self.surface_config.present_mode = new_mode;
+        if self.is_surface_configured {
+            self.surface.configure(&self.device, &self.surface_config);
         }
     }
 

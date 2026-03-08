@@ -31,20 +31,53 @@ impl PlantType {
         PlantType::Mycelis,
         PlantType::Carrot,
     ];
-}
 
+    pub fn years_per_iteration(self) -> f32 {
+        match self {
+            PlantType::Tree => 5.0,        // 50 years to mature at max_age 10
+            PlantType::Bush => 2.0,        // 12 years to mature at max_age 6
+            PlantType::Fern => 0.1,        // ~2.5 years to mature at max_iterations 25
+            PlantType::Wildflower => 0.08, // ~7 months to mature — annual
+            PlantType::Capsella => 0.10,   // ~2 years to mature — biennial
+            PlantType::Mint => 0.20,       // ~4 years to mature — perennial herb
+            PlantType::Lychnis => 0.15,    // ~2 years to mature — biennial
+            PlantType::Mycelis => 0.02,    // ~2 years to mature — annual/biennial
+            PlantType::Carrot => 0.15,     // ~2 years to mature — biennial
+        }
+    }
+}
 impl fmt::Display for PlantType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            PlantType::Tree => write!(f, "Tree"),
-            PlantType::Bush => write!(f, "Bush"),
-            PlantType::Fern => write!(f, "Fern"),
-            PlantType::Wildflower => write!(f, "Wildflower"),
-            PlantType::Capsella => write!(f, "Capsella"),
-            PlantType::Mint => write!(f, "Mint"),
-            PlantType::Lychnis => write!(f, "Lychnis"),
-            PlantType::Mycelis => write!(f, "Mycelis"),
-            PlantType::Carrot => write!(f, "Carrot"),
+        write!(f, "{:?}", self)
+    }
+}
+
+// ── World Date ──
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct WorldDate {
+    pub year: u32,
+    pub week: u32,
+}
+
+impl WorldDate {
+    /// Season: 0 = spring, 0.25 = summer, 0.5 = autumn, 0.75 = winter
+    pub fn season(self) -> f32 {
+        self.week as f32 / 52.0
+    }
+
+    /// Total elapsed time in years
+    pub fn total_years(self) -> f32 {
+        self.year as f32 + self.week as f32 / 52.0
+    }
+
+    /// Advance by `weeks`, rolling over into the next year as needed
+    pub fn advance_weeks(self, weeks: i32) -> Self {
+        let total = self.year as i64 * 52 + self.week as i64 + weeks as i64;
+        let total = total.max(0) as u64;
+        Self {
+            year: (total / 52) as u32,
+            week: (total % 52) as u32,
         }
     }
 }
@@ -56,8 +89,15 @@ pub struct SceneData {
     pub name: String,
     pub plants: Vec<PlantInstance>,
     pub global_scale: f32,
-    pub global_age: u32,
-    pub dirty: bool,
+    pub date: WorldDate,
+    pub seed: u64,
+    pub generation: u64,
+}
+
+impl SceneData {
+    pub fn mark_dirty(&mut self) {
+        self.generation += 1;
+    }
 }
 
 // ── Scene Settings ──
@@ -67,6 +107,16 @@ pub struct SceneSettings {
     pub scenes: Vec<SceneData>,
     pub active_scene: usize,
     pub hardcoded_names: HashSet<String>,
+    /// Automatically advance the scene date each update tick
+    pub auto_progress: bool,
+    /// Date steps advanced per second when `auto_progress` is enabled
+    pub progress_rate: f32,
+    /// Weeks per step — also used by the arrow-key shortcuts
+    pub progress_step: u32,
+    /// Stop auto-progress after this many steps (0 = no limit)
+    pub max_steps: u32,
+    /// Steps taken since last `reset_steps()`
+    pub steps_taken: u32,
 }
 
 impl Default for SceneSettings {
@@ -76,8 +126,13 @@ impl Default for SceneSettings {
         let hardcoded_names = scenes.iter().map(|s| s.name.clone()).collect();
         Self {
             scenes,
-            active_scene: 1,
+            active_scene: 0,
             hardcoded_names,
+            auto_progress: false,
+            progress_rate: 1.0,
+            progress_step: 1,
+            max_steps: 0,
+            steps_taken: 0,
         }
     }
 }
@@ -94,6 +149,41 @@ impl SceneSettings {
     pub fn active_mut(&mut self) -> &mut SceneData {
         &mut self.scenes[self.active_scene]
     }
+
+    /// Advance the active scene's date if auto-progress is enabled.
+    /// Returns the number of steps actually taken this tick (0 if none).
+    /// Stops auto-progress automatically when `max_steps > 0` is reached.
+    pub fn tick_progress(&mut self, dt_secs: f32) -> u32 {
+        if !self.auto_progress {
+            return 0;
+        }
+        let steps = ((dt_secs * self.progress_rate).round() as u32).max(1);
+
+        let actual = if self.max_steps > 0 {
+            steps.min(self.max_steps.saturating_sub(self.steps_taken))
+        } else {
+            steps
+        };
+
+        if actual > 0 {
+            let advance = (actual * self.progress_step) as i32;
+            let scene = self.active_mut();
+            scene.date = scene.date.advance_weeks(advance);
+            scene.mark_dirty();
+            self.steps_taken += actual;
+
+            if self.max_steps > 0 && self.steps_taken >= self.max_steps {
+                self.auto_progress = false;
+                self.steps_taken = 0;
+            }
+        }
+
+        actual
+    }
+
+    pub fn reset_steps(&mut self) {
+        self.steps_taken = 0;
+    }
 }
 
 // ── Environment Settings ──
@@ -106,31 +196,50 @@ pub struct EnvironmentSettings {
     pub wind_azimuth: f32,
     pub wind_strength: f32,
     pub wind_turbulence: f32,
+    /// When true, wind deflection is baked into geometry.
+    pub wind_baked: bool,
+    /// Vertex-shader sway amplitude (0.0 = disabled / screenshot mode; ~0.03 = gentle).
+    /// Independent of the baked wind: can animate geometry that was built with no baked wind.
+    pub wind_anim_strength: f32,
     pub taper: f32,
-    pub seed: u64,
-    // Season: 0.0=spring, 0.25=summer, 0.5=autumn, 0.75=winter
-    pub season: f32,
-    pub auto_advance: bool,
-    pub season_speed: f32,
-    pub dirty: bool,
+    // Proprioceptive self-correction (Bastien et al. AC model, discrete approximation).
+    // Higher values produce stronger straightening toward the pre-tropism heading.
+    pub proprioception_gamma: f32,
+    // Ornstein–Uhlenbeck correlated heading drift (stochastic variation).
+    pub variation_noise_strength: f32,
+    pub variation_decay_rate: f32,
+    // Per-branch colour OU drift amplitude (0 = off).
+    pub colour_variation: f32,
+    pub generation: u64,
+}
+
+impl EnvironmentSettings {
+    pub fn mark_dirty(&mut self) {
+        self.generation += 1;
+    }
 }
 
 impl Default for EnvironmentSettings {
     fn default() -> Self {
         Self {
-            light_position: [0.0, 100.0, 0.0],
+            light_position: [50.0, 100.0, 50.0],
             ambient: 0.3,
-            tropism_strength: 0.0,
-            gravitropism_strength: 0.0,
-            wind_azimuth: 0.0,
+            // Mild phototropism and gravitropism produce naturally curved stems
+            tropism_strength: 0.04,
+            gravitropism_strength: 0.08,
+            wind_azimuth: 45.0,
             wind_strength: 0.0,
             wind_turbulence: 0.0,
-            taper: 1.0,
-            seed: 0,
-            season: 0.25, // start in summer
-            auto_advance: false,
-            season_speed: 0.02,
-            dirty: false,
+            wind_baked: true,
+            wind_anim_strength: 0.0,
+            taper: 0.97,
+            // Gentle proprioceptive straightening toward vertical
+            proprioception_gamma: 0.1,
+            // Subtle correlated variation for organic branching variance
+            variation_noise_strength: 0.015,
+            variation_decay_rate: 0.15,
+            colour_variation: 0.03,
+            generation: 0,
         }
     }
 }
@@ -140,6 +249,10 @@ impl Default for EnvironmentSettings {
 pub struct CameraSettings {
     pub speed: f32,
     pub sensitivity: f32,
+    pub auto_orbit: bool,
+    pub orbit_speed: f32,
+    pub orbit_centre: [f32; 3],
+    pub fov: f32,
 }
 
 impl Default for CameraSettings {
@@ -147,6 +260,10 @@ impl Default for CameraSettings {
         Self {
             speed: 25.0,
             sensitivity: 0.001,
+            auto_orbit: false,
+            orbit_speed: 0.1,
+            orbit_centre: [0.0, 0.0, 0.0],
+            fov: 45.0,
         }
     }
 }
@@ -154,9 +271,8 @@ impl Default for CameraSettings {
 // ── Display Settings ──
 
 pub struct DisplaySettings {
-    pub background_color: [f32; 3],
-    pub ground_color: [f32; 3],
-    pub fov: f32,
+    pub background_colour: [f32; 3],
+    pub ground_colour: [f32; 3],
     pub show_lines: bool,
     pub show_meshes: bool,
     pub debug_mode: bool,
@@ -168,9 +284,8 @@ pub struct DisplaySettings {
 impl Default for DisplaySettings {
     fn default() -> Self {
         Self {
-            background_color: [0.3, 0.7, 0.9],
-            ground_color: [0.3, 0.5, 0.2],
-            fov: 45.0,
+            background_colour: [0.3, 0.7, 0.9],
+            ground_colour: [0.3, 0.5, 0.2],
             show_lines: false,
             show_meshes: true,
             debug_mode: false,
@@ -190,9 +305,12 @@ pub struct LodSettings {
     /// Distance beyond which minimum detail is rendered (3 cylinder segments).
     /// Plants further than this skip mesh generation entirely.
     pub far_threshold: f32,
-    /// Hard cap on total mesh indices. 0 = no cap.
-    /// When exceeded, plants are rendered at a higher LOD tier (lower detail) to stay under budget.
-    pub max_indices: u32,
+    /// Fraction of leaf quads randomly skipped at near distance. 0.0 = off.
+    pub leaf_skip_near: f32,
+    /// Fraction of leaf quads randomly skipped at mid distance.
+    pub leaf_skip_mid: f32,
+    /// Fraction of leaf quads randomly skipped at far distance.
+    pub leaf_skip_far: f32,
 }
 
 impl Default for LodSettings {
@@ -201,14 +319,31 @@ impl Default for LodSettings {
             near_threshold: 80.0,
             mid_threshold: 160.0,
             far_threshold: 300.0,
-            max_indices: 0,
+            leaf_skip_near: 0.0,
+            leaf_skip_mid: 0.3,
+            leaf_skip_far: 0.6,
+        }
+    }
+}
+
+// ── Cull Settings ──
+
+pub struct CullSettings {
+    /// Dead-zone width (metres) around each LOD boundary to prevent oscillation.
+    pub lod_hysteresis: f32,
+}
+
+impl Default for CullSettings {
+    fn default() -> Self {
+        Self {
+            lod_hysteresis: 5.0,
         }
     }
 }
 
 impl DisplaySettings {
-    pub fn clear_color(&self) -> wgpu::Color {
-        let [r, g, b] = self.background_color;
+    pub fn clear_colour(&self) -> wgpu::Color {
+        let [r, g, b] = self.background_colour;
         wgpu::Color {
             r: r as f64,
             g: g as f64,
@@ -227,6 +362,7 @@ pub struct Settings {
     pub camera: CameraSettings,
     pub display: DisplaySettings,
     pub lod: LodSettings,
+    pub cull: CullSettings,
 }
 
 // ── Season Utilities ──
@@ -256,17 +392,4 @@ pub fn season_tint(season: f32) -> Vec3 {
     } else {
         autumn_tint.lerp(winter_tint, (t - 0.5) * 2.0)
     }
-}
-
-/// Growth factor [0.3, 1.0] based on season. Summer=1.0, Winter=0.3.
-pub fn season_growth_factor(season: f32) -> f32 {
-    let s = season.rem_euclid(1.0);
-    // Cosine: peak at summer (0.25), trough at winter (0.75)
-    0.3 + 0.7 * (0.5 + 0.5 * (TAU * (s - 0.25)).cos())
-}
-
-/// Returns true if the growth factor would round to a different effective age,
-/// used to avoid full rebuilds every frame during auto-advance.
-pub fn season_needs_rebuild(old: f32, new: f32) -> bool {
-    (old * 20.0) as u32 != (new * 20.0) as u32
 }

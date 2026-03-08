@@ -183,11 +183,7 @@ impl Turtle {
         self.mesh_tangents.clear();
     }
 
-    /// Execute a sequence of actions, honouring the Cut (`%`) symbol and clip-volume pruning.
-    ///
-    /// When Cut is encountered inside a `[…]` branch, all subsequent actions up to the
-    /// matching `]` are skipped. Space-constrained pruning (clip sphere) triggers the same
-    /// cut mechanism when the turtle's position leaves the allowed volume.
+    /// Execute a sequence of actions
     pub fn do_actions<A: Into<Action> + Copy>(&mut self, actions: &[A]) {
         let mut depth: usize = 0;
         let mut cut_at: Option<usize> = None;
@@ -628,7 +624,7 @@ impl Turtle {
         }
     }
 
-    /// Discrete proprioceptive correction (simplified Bastien et al. 2015 AC model).
+    /// Discrete proprioceptive correction
     ///
     /// Accumulates curvature from heading deflection caused by tropisms, then applies
     /// a counter-rotation proportional to γ·C to straighten the shoot. The curvature
@@ -660,7 +656,7 @@ impl Turtle {
         self.prop_curvature *= 1.0 - self.proprioception_gamma.min(0.99);
     }
 
-    /// Extract line geometry data without writing to GPU
+    /// Extract line geometry
     pub fn line_geometry(&self) -> LineGeometry {
         let mut vertices = Vec::new();
         let mut colours = Vec::new();
@@ -762,7 +758,7 @@ pub struct MeshGeometry {
 }
 
 /// Combine multiple line geometries into one, adjusting indices
-pub fn combine_line_geometries(geos: &[LineGeometry]) -> LineGeometry {
+pub fn combine_line_geometries(geos: &[&LineGeometry]) -> LineGeometry {
     let total_verts: usize = geos.iter().map(|g| g.vertices.len()).sum();
     let total_indices: usize = geos.iter().map(|g| g.indices.len()).sum();
     let total_segments: usize = geos.iter().map(|g| g.segments.len()).sum();
@@ -795,7 +791,7 @@ pub fn combine_line_geometries(geos: &[LineGeometry]) -> LineGeometry {
 }
 
 /// Combine multiple mesh geometries into one, adjusting indices
-pub fn combine_mesh_geometries(geos: &[MeshGeometry]) -> MeshGeometry {
+pub fn combine_mesh_geometries(geos: &[&MeshGeometry]) -> MeshGeometry {
     let total_verts: usize = geos.iter().map(|g| g.vertices.len()).sum();
     let total_indices: usize = geos.iter().map(|g| g.indices.len()).sum();
 
