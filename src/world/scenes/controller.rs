@@ -6,7 +6,7 @@ use std::{
 use glam::{Mat4, Vec3, vec3};
 use wgpu::{Buffer, Queue};
 
-use super::lod::{LodTier, PlantCache, SceneStats, plant_lod_tier};
+use super::lod::{Frustum, LodTier, PlantCache, SceneStats, plant_lod_tier};
 use crate::{
     settings::{CullSettings, EnvironmentSettings, LodSettings, SceneSettings, WorldDate},
     util::{
@@ -117,6 +117,8 @@ struct TurtleConfig {
     variation_noise_strength: f32,
     variation_decay_rate: f32,
     colour_variation: f32,
+    space_pruning: bool,
+    occupancy_cell_size: f32,
 }
 
 impl TurtleConfig {
@@ -137,6 +139,8 @@ impl TurtleConfig {
             variation_noise_strength: env.variation_noise_strength,
             variation_decay_rate: env.variation_decay_rate,
             colour_variation: env.colour_variation,
+            space_pruning: env.space_pruning,
+            occupancy_cell_size: env.occupancy_cell_size,
         }
     }
 
@@ -158,6 +162,7 @@ impl TurtleConfig {
             self.variation_decay_rate,
             self.colour_variation,
         );
+        turtle.set_space_pruning(self.space_pruning, self.occupancy_cell_size);
         turtle.roll(FRAC_PI_2);
         turtle.turn(FRAC_PI_2);
         turtle.roll(rotation.to_radians());
@@ -182,6 +187,8 @@ pub struct SceneController {
     last_debug_mode: bool,
     last_scene_gen: u64,
     last_env_gen: u64,
+    last_eco_gen: u64,
+    last_active_scene: usize,
     stats: SceneStats,
     /// Pressure multiplier applied to LOD thresholds and leaf-skip when geometry
     /// exceeds MAX_VERTS. 1.0 = nominal; < 1.0 = tighter culling.
@@ -208,6 +215,8 @@ impl SceneController {
             // u64::MAX / usize::MAX ensures the first frame always triggers a rebuild.
             last_scene_gen: u64::MAX,
             last_env_gen: u64::MAX,
+            last_eco_gen: u64::MAX,
+            last_active_scene: usize::MAX,
             stats: SceneStats::default(),
             lod_pressure: 1.0,
             last_pressure: 1.0,
@@ -228,7 +237,9 @@ impl SceneController {
         cull: &CullSettings,
         frame: &FrameParams,
     ) -> SceneOutput {
+        let active_scene_idx = settings.active_scene;
         let scene = settings.active_mut();
+        let frustum = Frustum::from_view_proj(frame.view_proj);
 
         let pressure_changed = (self.lod_pressure - self.last_pressure).abs() > 1e-4;
         let full_rebuild = scene.generation != self.last_scene_gen
@@ -240,7 +251,7 @@ impl SceneController {
         let lod = &effective;
 
         let desired_tiers =
-            self.compute_desired_tiers(scene, frame.camera_pos, lod, cull, full_rebuild);
+            self.compute_desired_tiers(scene, frame.camera_pos, &frustum, lod, cull, full_rebuild);
 
         let any_changed = full_rebuild
             || frame.debug_mode != self.last_debug_mode
@@ -315,6 +326,7 @@ impl SceneController {
         &self,
         scene: &crate::settings::SceneData,
         camera_pos: Vec3,
+        frustum: &Frustum,
         lod: &LodSettings,
         cull: &CullSettings,
         full_rebuild: bool,
@@ -329,7 +341,15 @@ impl SceneController {
                 } else {
                     self.plant_caches[i].tier
                 };
-                plant_lod_tier(p.position, camera_pos, prev, lod, cull, full_rebuild)
+                plant_lod_tier(
+                    p.position,
+                    camera_pos,
+                    prev,
+                    frustum,
+                    lod,
+                    cull,
+                    full_rebuild,
+                )
             })
             .collect()
     }
@@ -352,6 +372,7 @@ impl SceneController {
         }
 
         let mut turtle = Turtle::new(Vec3::ZERO, Vec3::ZERO);
+        turtle.clear_occupancy();
 
         for (i, plant) in scene.plants.iter_mut().enumerate() {
             let tier = desired_tiers[i];

@@ -21,6 +21,12 @@ pub struct DebugInfo {
     pub rebuild_history: VecDeque<f32>,
     pub camera_pos: [f32; 3],
     pub scene: SceneStats,
+    pub timelapse_active: bool,
+    pub timelapse_frames: u32,
+    /// Path of the GIF being written (or last written).
+    pub timelapse_path: String,
+    /// Path of the last saved screenshot PNG (empty if none taken yet).
+    pub last_screenshot_path: String,
 }
 
 pub struct EguiRenderer {
@@ -618,6 +624,40 @@ fn environment_ui(ui: &mut egui::Ui, env: &mut EnvironmentSettings) {
                     ui.end_row();
                 });
 
+            // Space Pruning
+            ui.strong("Space Pruning");
+            Grid::new("env_pruning_grid")
+                .num_columns(2)
+                .striped(true)
+                .show(ui, |ui| {
+                    ui.label("Enabled").on_hover_text(
+                        "Cut branches whose tip enters a voxel cell already occupied by another \
+                         branch. Produces natural crown shaping and prevents interpenetration \
+                         between neighbouring plants.",
+                    );
+                    if ui.checkbox(&mut env.space_pruning, "").changed() {
+                        env.mark_dirty();
+                    }
+                    ui.end_row();
+
+                    if env.space_pruning {
+                        ui.label("Cell size").on_hover_text(
+                            "Voxel resolution in world units. Smaller = finer pruning and denser \
+                             packing; larger = only coarse overlap is detected.",
+                        );
+                        if ui
+                            .add(
+                                Slider::new(&mut env.occupancy_cell_size, 0.1..=2.0)
+                                    .fixed_decimals(2),
+                            )
+                            .changed()
+                        {
+                            env.mark_dirty();
+                        }
+                        ui.end_row();
+                    }
+                });
+
             // Light & Appearance
             ui.strong("Light & Appearance");
             Grid::new("env_light_grid")
@@ -804,6 +844,42 @@ fn display_ui(ui: &mut egui::Ui, settings: &mut Settings, actions: &mut UiAction
                 });
                 ui.end_row();
             });
+
+        ui.collapsing("Culling", |ui| {
+            Grid::new("cull_grid")
+                .num_columns(2)
+                .striped(true)
+                .show(ui, |ui| {
+                    ui.label("Frustum culling").on_hover_text(
+                        "Skip plants that are entirely outside the camera's view frustum. Disable \
+                         if plants incorrectly disappear at screen edges.",
+                    );
+                    if ui
+                        .checkbox(&mut settings.cull.frustum_culling, "")
+                        .changed()
+                    {
+                        actions.scene_dirty = true;
+                    }
+                    ui.end_row();
+
+                    if settings.cull.frustum_culling {
+                        ui.label("Cull radius").on_hover_text(
+                            "Bounding-sphere radius used for frustum culling (world units). \
+                             Increase if large plants are incorrectly culled near the screen edge.",
+                        );
+                        if ui
+                            .add(
+                                Slider::new(&mut settings.cull.cull_radius, 1.0..=100.0)
+                                    .suffix(" m"),
+                            )
+                            .changed()
+                        {
+                            actions.scene_dirty = true;
+                        }
+                        ui.end_row();
+                    }
+                });
+        });
 
         ui.collapsing("LOD", |ui| {
             Grid::new("lod_grid")

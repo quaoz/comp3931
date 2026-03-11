@@ -1,4 +1,4 @@
-use glam::Vec3;
+use glam::{Mat4, Vec3, Vec4};
 
 use crate::{
     settings::{CullSettings, LodSettings},
@@ -18,7 +18,7 @@ pub enum LodTier {
     Far = 2,
     /// Beyond far threshold: no mesh, line skeleton only, no leaves.
     Beyond = 3,
-    /// Outside view: nothing rendered.
+    /// Outside view frustum: nothing rendered.
     Culled = 4,
 }
 
@@ -92,15 +92,54 @@ pub fn lod_tier_smooth(
     }
 }
 
-/// Returns the LOD tier for a plant
+// ── Frustum culling ──
+
+/// Six half-space planes extracted from a view-projection matrix (Gribb–Hartmann method).
+/// Each plane is normalised so that `dot(plane.xyz, point) + plane.w` is the signed
+/// distance from `point` to the plane.
+pub struct Frustum {
+    planes: [Vec4; 6],
+}
+
+impl Frustum {
+    pub fn from_view_proj(vp: Mat4) -> Self {
+        let t = vp.transpose();
+        let planes_raw = [
+            t.w_axis + t.x_axis, // left
+            t.w_axis - t.x_axis, // right
+            t.w_axis + t.y_axis, // bottom
+            t.w_axis - t.y_axis, // top
+            t.w_axis + t.z_axis, // near
+            t.w_axis - t.z_axis, // far
+        ];
+        let planes = planes_raw.map(|p| {
+            let len = p.truncate().length();
+            if len > 1e-6 { p / len } else { p }
+        });
+        Self { planes }
+    }
+
+    /// Returns `false` only when the sphere is fully outside at least one frustum plane.
+    /// Conservative — false negatives are impossible; false positives are safe.
+    pub fn contains_sphere(&self, centre: Vec3, radius: f32) -> bool {
+        let c = centre.extend(1.0);
+        self.planes.iter().all(|&plane| plane.dot(c) >= -radius)
+    }
+}
+
+/// Returns the LOD tier for a plant, applying frustum culling and hysteresis.
 pub fn plant_lod_tier(
     pos: Vec3,
     camera_pos: Vec3,
     prev_tier: LodTier,
+    frustum: &Frustum,
     lod: &LodSettings,
     cull: &CullSettings,
     full_rebuild: bool,
 ) -> LodTier {
+    if cull.frustum_culling && !frustum.contains_sphere(pos, cull.cull_radius) {
+        return LodTier::Culled;
+    }
     let dist = (pos - camera_pos).length();
     if full_rebuild {
         lod_tier(dist, lod)
@@ -114,6 +153,9 @@ pub fn plant_lod_tier(
 pub struct PlantCache {
     /// Tier used for geometry.
     pub tier: LodTier,
+    /// Tier requested by distance/frustum before any adjustment.
+    /// Change detection compares against this so that escalation alone does not
+    /// trigger a continuous rebuild cycle.
     pub requested_tier: LodTier,
     pub line_geo: LineGeometry,
     pub mesh_geo: MeshGeometry,

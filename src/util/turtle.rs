@@ -1,8 +1,10 @@
-use std::f32::consts::TAU;
+use std::{collections::HashSet, f32::consts::TAU};
 
 use glam::Vec3;
 
-use crate::util::rng;
+use crate::util::{fnv::FnvBuildHasher, rng};
+
+type VoxelSet = HashSet<(i32, i32, i32), FnvBuildHasher>;
 
 const DEFAULT_CYLINDER_SEGMENTS: usize = 8;
 
@@ -81,6 +83,15 @@ pub struct Turtle {
     // Per-branch colour OU drift (reset on Push).
     colour_drift: Vec3,
     colour_variation: f32,
+    // Voxel-grid space pruning.
+    // `occupancy_grid`      — cells from fully-built plants; checked but never written during build.
+    // `current_plant_marks` — cells marked by the plant currently being built; written but not
+    //                         checked, so intra-plant branches never block each other.
+    // `reset()` flushes current_plant_marks into occupancy_grid before the next plant starts.
+    occupancy_grid: VoxelSet,
+    current_plant_marks: VoxelSet,
+    occupancy_cell_size: f32,
+    space_pruning: bool,
     // Leaf skip probability (0.0 = never skip, 1.0 = always skip)
     leaf_skip_prob: f32,
     // Internal buffers
@@ -121,6 +132,10 @@ impl Turtle {
             branch_arc_length: 0.0,
             colour_drift: Vec3::ZERO,
             colour_variation: 0.0,
+            occupancy_grid: HashSet::with_hasher(FnvBuildHasher::new()),
+            current_plant_marks: HashSet::with_hasher(FnvBuildHasher::new()),
+            occupancy_cell_size: 0.5,
+            space_pruning: false,
             leaf_skip_prob: 0.0,
             stack: Vec::new(),
             path_buf: vec![pos],
@@ -163,6 +178,12 @@ impl Turtle {
         self.branch_arc_length = 0.0;
         self.colour_drift = Vec3::ZERO;
         self.colour_variation = 0.0;
+        // Flush this plant's marks into the shared grid so that subsequent plants can
+        // be pruned by them. The grid itself is NOT cleared here — it persists across
+        // plants. Call clear_occupancy() once at the start of a full scene rebuild.
+        self.occupancy_grid.extend(self.current_plant_marks.drain());
+        self.occupancy_cell_size = 0.5;
+        self.space_pruning = false;
         self.leaf_skip_prob = 0.0;
         self.stack.clear();
         self.path_buf.clear();
@@ -183,7 +204,11 @@ impl Turtle {
         self.mesh_tangents.clear();
     }
 
-    /// Execute a sequence of actions
+    /// Execute a sequence of actions, honouring the Cut (`%`) symbol and clip-volume pruning.
+    ///
+    /// When Cut is encountered inside a `[…]` branch, all subsequent actions up to the
+    /// matching `]` are skipped. Space-constrained pruning (clip sphere) triggers the same
+    /// cut mechanism when the turtle's position leaves the allowed volume.
     pub fn do_actions<A: Into<Action> + Copy>(&mut self, actions: &[A]) {
         let mut depth: usize = 0;
         let mut cut_at: Option<usize> = None;
@@ -220,7 +245,31 @@ impl Turtle {
                         }
                     }
                     other => {
+                        // Space pruning: for Branch actions, check every cell the cylinder
+                        // passes through, not just the tip. Capture base+end before executing
+                        // so both the check and the post-mark use the same straight segment.
+                        let branch_segment = if self.space_pruning
+                            && let Action::Branch(length, diameter) = other
+                        {
+                            let base = self.pos();
+                            let end = base + (length * self.scale) * self.heading;
+                            // Use the base (untapered) radius — largest value along the branch.
+                            let radius = (diameter * self.scale) * 0.5;
+                            if depth > 0 && self.segment_occupied(base, end, radius) {
+                                cut_at = Some(depth);
+                                continue;
+                            }
+                            Some((base, end, radius))
+                        } else {
+                            None
+                        };
+
                         self.do_action(other);
+
+                        // Mark all cells the cylinder occupies so later plants respect it.
+                        if let Some((base, end, radius)) = branch_segment {
+                            self.mark_segment(base, end, radius);
+                        }
                     }
                 }
             }
@@ -551,6 +600,21 @@ impl Turtle {
         self.colour_variation = colour_variation;
     }
 
+    /// Enable voxel-grid space pruning. When enabled, a branch whose tip falls in an
+    /// already-occupied cell is cut rather than generated. `cell_size` controls voxel
+    /// resolution in world units; smaller values give finer pruning at higher memory cost.
+    pub fn set_space_pruning(&mut self, enabled: bool, cell_size: f32) {
+        self.space_pruning = enabled;
+        self.occupancy_cell_size = cell_size.max(0.01);
+    }
+
+    /// Clear both occupancy sets. Call once at the start of each full scene rebuild
+    /// so that plants from the previous build do not block the new one.
+    pub fn clear_occupancy(&mut self) {
+        self.occupancy_grid.clear();
+        self.current_plant_marks.clear();
+    }
+
     /// Ornstein–Uhlenbeck update: applies correlated random drift to heading and colour.
     /// ou_drift evolves as: drift = drift * (1 - θ) + noise * σ
     fn apply_ou_variation(&mut self) {
@@ -624,7 +688,7 @@ impl Turtle {
         }
     }
 
-    /// Discrete proprioceptive correction
+    /// Discrete proprioceptive correction (simplified Bastien et al. 2015 AC model).
     ///
     /// Accumulates curvature from heading deflection caused by tropisms, then applies
     /// a counter-rotation proportional to γ·C to straighten the shoot. The curvature
@@ -656,7 +720,58 @@ impl Turtle {
         self.prop_curvature *= 1.0 - self.proprioception_gamma.min(0.99);
     }
 
-    /// Extract line geometry
+    /// Convert a world-space position to voxel grid coordinates.
+    fn world_to_cell(&self, pos: Vec3) -> (i32, i32, i32) {
+        let s = 1.0 / self.occupancy_cell_size;
+        (
+            (pos.x * s).floor() as i32,
+            (pos.y * s).floor() as i32,
+            (pos.z * s).floor() as i32,
+        )
+    }
+
+    /// Returns true if any voxel within `radius` of the segment `start`→`end` was occupied
+    /// by a previously completed plant. Steps at `occupancy_cell_size` intervals along the
+    /// axis and expands each sample by `ceil(radius / cell_size)` cells in every direction,
+    /// approximating the cylinder cross-section with an AABB.
+    /// When `radius < cell_size` the expansion is zero and this reduces to a centre-line check.
+    fn segment_occupied(&self, start: Vec3, end: Vec3, radius: f32) -> bool {
+        let seg = end - start;
+        let len = seg.length();
+        let steps = (len / self.occupancy_cell_size).ceil().max(1.0);
+        let r = (radius / self.occupancy_cell_size).ceil() as i32;
+
+        (0..=steps as usize).any(|i| {
+            let (cx, cy, cz) = self.world_to_cell(start + (i as f32 / steps) * seg);
+            (-r..=r).any(|dx| {
+                (-r..=r).any(|dy| {
+                    (-r..=r).any(|dz| self.occupancy_grid.contains(&(cx + dx, cy + dy, cz + dz)))
+                })
+            })
+        })
+    }
+
+    /// Marks every voxel within `radius` of the segment `start`→`end` as occupied by the
+    /// current plant, using the same AABB expansion as `segment_occupied`.
+    fn mark_segment(&mut self, start: Vec3, end: Vec3, radius: f32) {
+        let seg = end - start;
+        let len = seg.length();
+        let steps = (len / self.occupancy_cell_size).ceil().max(1.0);
+        let r = (radius / self.occupancy_cell_size).ceil() as i32;
+
+        for i in 0..=steps as usize {
+            let (cx, cy, cz) = self.world_to_cell(start + (i as f32 / steps) * seg);
+            for dx in -r..=r {
+                for dy in -r..=r {
+                    for dz in -r..=r {
+                        self.current_plant_marks.insert((cx + dx, cy + dy, cz + dz));
+                    }
+                }
+            }
+        }
+    }
+
+    /// Extract line geometry data without writing to GPU
     pub fn line_geometry(&self) -> LineGeometry {
         let mut vertices = Vec::new();
         let mut colours = Vec::new();

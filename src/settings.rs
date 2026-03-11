@@ -46,6 +46,7 @@ impl PlantType {
         }
     }
 }
+
 impl fmt::Display for PlantType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{:?}", self)
@@ -210,6 +211,9 @@ pub struct EnvironmentSettings {
     pub variation_decay_rate: f32,
     // Per-branch colour OU drift amplitude (0 = off).
     pub colour_variation: f32,
+    // Voxel-grid space pruning: branches whose tip lands in an already-occupied cell are cut.
+    pub space_pruning: bool,
+    pub occupancy_cell_size: f32,
     pub generation: u64,
 }
 
@@ -239,6 +243,8 @@ impl Default for EnvironmentSettings {
             variation_noise_strength: 0.015,
             variation_decay_rate: 0.15,
             colour_variation: 0.03,
+            space_pruning: false,
+            occupancy_cell_size: 0.5,
             generation: 0,
         }
     }
@@ -279,6 +285,10 @@ pub struct DisplaySettings {
     pub vsync: bool,
     /// Target frames per second. 0 = unlimited.
     pub frame_target: u32,
+    /// Timelapse GIF output width in pixels.
+    pub timelapse_width: u32,
+    /// Timelapse GIF output height in pixels.
+    pub timelapse_height: u32,
 }
 
 impl Default for DisplaySettings {
@@ -291,6 +301,8 @@ impl Default for DisplaySettings {
             debug_mode: false,
             vsync: true,
             frame_target: 0,
+            timelapse_width: 1920,
+            timelapse_height: 1080,
         }
     }
 }
@@ -329,6 +341,11 @@ impl Default for LodSettings {
 // ── Cull Settings ──
 
 pub struct CullSettings {
+    /// Enable view-frustum culling. Plants outside the camera frustum are skipped entirely.
+    pub frustum_culling: bool,
+    /// Conservative bounding-sphere radius used for per-plant frustum culling (world units).
+    /// Increase if large plants are incorrectly culled at the screen edge.
+    pub cull_radius: f32,
     /// Dead-zone width (metres) around each LOD boundary to prevent oscillation.
     pub lod_hysteresis: f32,
 }
@@ -336,6 +353,8 @@ pub struct CullSettings {
 impl Default for CullSettings {
     fn default() -> Self {
         Self {
+            frustum_culling: true,
+            cull_radius: 20.0,
             lod_hysteresis: 5.0,
         }
     }
