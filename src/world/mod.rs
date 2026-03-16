@@ -12,6 +12,7 @@ use crate::{
 };
 
 pub mod camera;
+pub mod ecosystem;
 pub mod plants;
 pub mod scenes;
 

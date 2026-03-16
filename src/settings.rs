@@ -32,6 +32,39 @@ impl PlantType {
         PlantType::Carrot,
     ];
 
+    /// Intrinsic shade tolerance [0, 1]. Higher = survives better under canopy competition.
+    pub fn shade_tolerance(self) -> f32 {
+        match self {
+            PlantType::Tree => 0.75,
+            PlantType::Bush => 0.50,
+            PlantType::Fern => 0.90,
+            PlantType::Wildflower => 0.20,
+            PlantType::Capsella => 0.10,
+            PlantType::Mint => 0.45,
+            PlantType::Lychnis => 0.30,
+            PlantType::Mycelis => 0.65,
+            PlantType::Carrot => 0.25,
+        }
+    }
+
+    /// Intrinsic growth rate (radius units per succession step).
+    pub fn growth_rate(self) -> f32 {
+        match self {
+            PlantType::Tree => 0.04,
+            PlantType::Bush => 0.08,
+            PlantType::Fern => 0.10,
+            PlantType::Wildflower => 0.18,
+            PlantType::Capsella => 0.25,
+            PlantType::Mint => 0.14,
+            PlantType::Lychnis => 0.16,
+            PlantType::Mycelis => 0.12,
+            PlantType::Carrot => 0.17,
+        }
+    }
+
+    /// Real-world years per L-system iteration for date-based age computation.
+    /// Slow-growing species (trees) require many years per step;
+    /// annuals complete their lifecycle in a fraction of a year.
     pub fn years_per_iteration(self) -> f32 {
         match self {
             PlantType::Tree => 5.0,        // 50 years to mature at max_age 10
@@ -92,6 +125,7 @@ pub struct SceneData {
     pub global_scale: f32,
     pub date: WorldDate,
     pub seed: u64,
+    pub ecosystem: EcosystemSettings,
     pub generation: u64,
 }
 
@@ -199,8 +233,7 @@ pub struct EnvironmentSettings {
     pub wind_turbulence: f32,
     /// When true, wind deflection is baked into geometry.
     pub wind_baked: bool,
-    /// Vertex-shader sway amplitude (0.0 = disabled / screenshot mode; ~0.03 = gentle).
-    /// Independent of the baked wind: can animate geometry that was built with no baked wind.
+    /// Vertex-shader sway amplitude
     pub wind_anim_strength: f32,
     pub taper: f32,
     // Proprioceptive self-correction (Bastien et al. AC model, discrete approximation).
@@ -368,6 +401,60 @@ impl DisplaySettings {
             g: g as f64,
             b: b as f64,
             a: 1.0,
+        }
+    }
+}
+
+// ── Ecosystem Settings ──
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EcosystemKernel {
+    Neutral,
+    Inhibitory,
+    Promotional,
+    Mixed,
+}
+
+impl fmt::Display for EcosystemKernel {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{:?}", self)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct EcosystemSettings {
+    pub area: f32,
+    pub num_plants: u32,
+    pub kernel: EcosystemKernel,
+    pub kernel_radius: f32,
+    pub use_self_thinning: bool,
+    pub thinning_radius: f32,
+    pub use_succession: bool,
+    pub succession_steps: u32,
+    /// Species present in this community and their relative abundance weights.
+    pub species: Vec<(PlantType, f32)>,
+    pub generation: u64,
+}
+
+impl EcosystemSettings {
+    pub fn mark_dirty(&mut self) {
+        self.generation += 1;
+    }
+}
+
+impl Default for EcosystemSettings {
+    fn default() -> Self {
+        Self {
+            area: 80.0,
+            num_plants: 60,
+            kernel: EcosystemKernel::Inhibitory,
+            kernel_radius: 10.0,
+            use_self_thinning: false,
+            thinning_radius: 8.0,
+            use_succession: false,
+            succession_steps: 10,
+            species: vec![(PlantType::Tree, 0.4), (PlantType::Fern, 0.6)],
+            generation: 0,
         }
     }
 }

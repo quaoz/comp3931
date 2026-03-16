@@ -1,3 +1,5 @@
+use std::fmt::Display;
+
 use crate::util::rng::random_bool;
 
 /// Whether a symbol is subject to rewriting

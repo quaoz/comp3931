@@ -14,6 +14,7 @@ use crate::{
         gui::{DebugInfo, EguiRenderer, controls_ui},
         renderer::Renderer,
     },
+    perf::PerfLogger,
     settings::{CameraSettings, CullSettings, DisplaySettings, LodSettings, Settings},
     world::{World, scenes::hardcoded_scenes},
 };
@@ -36,6 +37,7 @@ pub struct State {
 
     fps_samples: VecDeque<f32>,
     debug_info: DebugInfo,
+    perf: PerfLogger,
 
     last_draw_time: Instant,
     elapsed_secs: f32,
@@ -61,6 +63,7 @@ impl State {
             debug_info: DebugInfo::default(),
             show_ui: true,
             elapsed_secs: 0.0,
+            perf: PerfLogger::default(),
         })
     }
 
@@ -151,6 +154,11 @@ impl State {
             }
         }
 
+        // Record one CSV row (and update rolling summary) for every rendered frame.
+        let scene_name = self.settings.scene.active().name.clone();
+        let date = self.settings.scene.active().date;
+        self.perf.record(&self.debug_info, &scene_name, date);
+
         let camera_info = self.world.camera_info();
 
         // TODO: cleanup, some of this should be wired directly
@@ -161,6 +169,7 @@ impl State {
                 &mut self.settings,
                 &self.debug_info,
                 &camera_info,
+                &mut self.perf,
             )
         } else {
             Default::default()
@@ -170,11 +179,12 @@ impl State {
         }
         if let Some(seed) = actions.new_scene_seed {
             self.settings.scene.active_mut().seed = seed;
+            self.settings.scene.active_mut().ecosystem.mark_dirty();
             self.settings.scene.active_mut().mark_dirty();
         }
         if actions.reset_scene {
             let active = self.settings.scene.active_scene;
-            let old_eco_gen = self.settings.scene.scenes[active].generation;
+            let old_eco_gen = self.settings.scene.scenes[active].ecosystem.generation;
 
             if let Some(mut default) = hardcoded_scenes()
                 .into_iter()

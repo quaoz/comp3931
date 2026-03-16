@@ -4,7 +4,7 @@ struct Uniforms {
     ambient: f32,         // 76–79
     season_tint: vec3<f32>,   // 80–91  (multiplied per-frame, no scene rebuild needed)
     time: f32,         // 92–95  (elapsed seconds, wraps at ~6h)
-    wind_anim_strength: f32,         // 96–99  (0 = off / screenshot mode)
+    wind_anim_strength: f32,         // 96–99
     wind_dir_x: f32,         // 100–103
     wind_dir_z: f32,         // 104–107
     _pad: f32,         // 108–111 (struct size = 112, align = 16)

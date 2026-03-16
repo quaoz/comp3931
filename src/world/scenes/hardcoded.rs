@@ -1,8 +1,4 @@
-use crate::{
-    settings::{PlantType, SceneData, WorldDate},
-    util::rng,
-    world::plants::PlantInstance,
-};
+use crate::settings::{EcosystemKernel, EcosystemSettings, PlantType, SceneData, WorldDate};
 
 pub fn hardcoded_scenes() -> Vec<SceneData> {
     vec![
@@ -14,153 +10,122 @@ pub fn hardcoded_scenes() -> Vec<SceneData> {
 }
 
 fn garden_scene() -> SceneData {
+    use PlantType::*;
     SceneData {
         name: "Garden".to_string(),
-        plants: vec![
-            PlantInstance::new(PlantType::Tree, 0.5).with_transform([0.0, 0.0, 0.0], 10.0, 0.0),
-            PlantInstance::new(PlantType::Bush, 0.4).with_transform([15.0, 0.0, 10.0], 8.0, 45.0),
-            PlantInstance::new(PlantType::Fern, 0.4).with_transform([-12.0, 0.0, 5.0], 6.0, 120.0),
-            PlantInstance::new(PlantType::Mint, 0.4).with_transform([8.0, 0.0, -10.0], 7.0, 200.0),
-            PlantInstance::new(PlantType::Tree, 0.4).with_transform(
-                [-8.0, 0.0, -15.0],
-                12.0,
-                270.0,
-            ),
-            PlantInstance::new(PlantType::Wildflower, 0.5).with_transform(
-                [5.0, 0.0, -5.0],
-                5.0,
-                90.0,
-            ),
-            PlantInstance::new(PlantType::Capsella, 0.3).with_transform(
-                [18.0, 0.0, -5.0],
-                5.0,
-                160.0,
-            ),
-            PlantInstance::new(PlantType::Fern, 0.3).with_transform([-18.0, 0.0, -8.0], 5.0, 300.0),
-            PlantInstance::new(PlantType::Bush, 0.3).with_transform([-5.0, 0.0, 18.0], 7.0, 215.0),
-            PlantInstance::new(PlantType::Wildflower, 0.4).with_transform(
-                [20.0, 0.0, -18.0],
-                4.0,
-                330.0,
-            ),
-        ],
+        plants: Vec::new(),
         global_scale: 1.0,
         date: WorldDate::default(),
         seed: 7,
+        ecosystem: EcosystemSettings {
+            area: 80.0,
+            num_plants: 400,
+            kernel: EcosystemKernel::Mixed,
+            kernel_radius: 7.0,
+            use_self_thinning: true,
+            thinning_radius: 4.0,
+            use_succession: false,
+            succession_steps: 10,
+            species: vec![
+                (Tree, 1.0),
+                (Bush, 2.0),
+                (Fern, 1.5),
+                (Mint, 1.5),
+                (Wildflower, 2.0),
+                (Capsella, 1.0),
+                (Lychnis, 1.0),
+            ],
+            generation: 0,
+        },
         generation: 0,
     }
 }
 
 fn meadow_scene() -> SceneData {
+    use PlantType::*;
     SceneData {
         name: "Meadow".to_string(),
-        plants: vec![
-            PlantInstance::new(PlantType::Wildflower, 0.5).with_transform(
-                [0.0, 0.0, 0.0],
-                5.0,
-                0.0,
-            ),
-            PlantInstance::new(PlantType::Wildflower, 0.4).with_transform(
-                [-8.0, 0.0, 6.0],
-                6.0,
-                45.0,
-            ),
-            PlantInstance::new(PlantType::Wildflower, 0.6).with_transform(
-                [10.0, 0.0, -4.0],
-                4.0,
-                90.0,
-            ),
-            PlantInstance::new(PlantType::Lychnis, 0.4).with_transform(
-                [-5.0, 0.0, -10.0],
-                8.0,
-                135.0,
-            ),
-            PlantInstance::new(PlantType::Lychnis, 0.3).with_transform([7.0, 0.0, 8.0], 7.0, 180.0),
-            PlantInstance::new(PlantType::Carrot, 0.4).with_transform(
-                [-12.0, 0.0, -3.0],
-                6.0,
-                225.0,
-            ),
-            PlantInstance::new(PlantType::Carrot, 0.3).with_transform([3.0, 0.0, 12.0], 7.0, 270.0),
-            PlantInstance::new(PlantType::Capsella, 0.4).with_transform(
-                [15.0, 0.0, 5.0],
-                5.0,
-                315.0,
-            ),
-            PlantInstance::new(PlantType::Carrot, 0.4).with_transform(
-                [-18.0, 0.0, 12.0],
-                6.0,
-                20.0,
-            ),
-            PlantInstance::new(PlantType::Wildflower, 0.3).with_transform(
-                [18.0, 0.0, 10.0],
-                4.0,
-                250.0,
-            ),
-            PlantInstance::new(PlantType::Capsella, 0.3).with_transform(
-                [5.0, 0.0, -18.0],
-                5.0,
-                80.0,
-            ),
-            PlantInstance::new(PlantType::Lychnis, 0.5).with_transform(
-                [-14.0, 0.0, -15.0],
-                7.0,
-                195.0,
-            ),
-        ],
+        plants: Vec::new(),
         global_scale: 1.0,
         date: WorldDate::default(),
         seed: 13,
+        ecosystem: EcosystemSettings {
+            area: 140.0,
+            num_plants: 1000,
+            kernel: EcosystemKernel::Inhibitory,
+            kernel_radius: 6.0,
+            use_self_thinning: false,
+            thinning_radius: 4.0,
+            use_succession: true,
+            succession_steps: 6,
+            species: vec![
+                (Wildflower, 5.0),
+                (Lychnis, 2.0),
+                (Carrot, 2.0),
+                (Capsella, 1.5),
+                (Mint, 1.0),
+            ],
+            generation: 0,
+        },
         generation: 0,
     }
 }
 
 fn botanical_scene() -> SceneData {
+    use PlantType::*;
     SceneData {
         name: "Botanical".to_string(),
-        plants: vec![
-            PlantInstance::new(PlantType::Capsella, 0.5).with_transform(
-                [-20.0, 0.0, 0.0],
-                8.0,
-                0.0,
-            ),
-            PlantInstance::new(PlantType::Mint, 0.5).with_transform([-10.0, 0.0, 0.0], 7.0, 30.0),
-            PlantInstance::new(PlantType::Lychnis, 0.4).with_transform([0.0, 0.0, 0.0], 9.0, 60.0),
-            PlantInstance::new(PlantType::Lychnis, 0.5).with_transform([10.0, 0.0, 0.0], 8.0, 90.0),
-            PlantInstance::new(PlantType::Carrot, 0.4).with_transform([20.0, 0.0, 0.0], 7.0, 120.0),
-            PlantInstance::new(PlantType::Fern, 0.5).with_transform([-5.0, 0.0, -15.0], 8.0, 150.0),
-            PlantInstance::new(PlantType::Bush, 0.4).with_transform([5.0, 0.0, -15.0], 7.0, 180.0),
-            PlantInstance::new(PlantType::Tree, 0.4).with_transform(
-                [-25.0, 0.0, -20.0],
-                10.0,
-                230.0,
-            ),
-            PlantInstance::new(PlantType::Wildflower, 0.4).with_transform(
-                [25.0, 0.0, -10.0],
-                5.0,
-                310.0,
-            ),
-            PlantInstance::new(PlantType::Mint, 0.3).with_transform([0.0, 0.0, 18.0], 6.0, 45.0),
-            PlantInstance::new(PlantType::Carrot, 0.3).with_transform(
-                [-15.0, 0.0, 15.0],
-                6.0,
-                270.0,
-            ),
-        ],
+        plants: Vec::new(),
         global_scale: 1.0,
         date: WorldDate::default(),
         seed: 22,
+        ecosystem: EcosystemSettings {
+            area: 100.0,
+            num_plants: 90,
+            kernel: EcosystemKernel::Neutral,
+            kernel_radius: 9.0,
+            use_self_thinning: true,
+            thinning_radius: 6.0,
+            use_succession: false,
+            succession_steps: 10,
+            // One of each species at equal weight — good for grammar comparison
+            species: vec![
+                (Capsella, 1.0),
+                (Mint, 1.0),
+                (Lychnis, 1.0),
+                (Carrot, 1.0),
+                (Fern, 1.0),
+                (Bush, 1.0),
+                (Tree, 1.0),
+                (Wildflower, 1.0),
+                (Mycelis, 1.0),
+            ],
+            generation: 0,
+        },
         generation: 0,
     }
 }
 
 fn forest_scene() -> SceneData {
+    use PlantType::*;
     SceneData {
         name: "Forest".to_string(),
-        plants: generate_forest_plants(0),
+        plants: Vec::new(),
         global_scale: 1.0,
         date: WorldDate::default(),
         seed: 0,
+        ecosystem: EcosystemSettings {
+            area: 160.0,
+            num_plants: 500,
+            kernel: EcosystemKernel::Inhibitory,
+            kernel_radius: 12.0,
+            use_self_thinning: true,
+            thinning_radius: 8.0,
+            use_succession: true,
+            succession_steps: 12,
+            species: vec![(Tree, 3.5), (Bush, 2.0), (Fern, 3.0), (Mycelis, 1.5)],
+            generation: 0,
+        },
         generation: 0,
     }
 }

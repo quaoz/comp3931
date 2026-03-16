@@ -111,39 +111,21 @@ impl Display {
         } else {
             wgpu::PresentMode::AutoNoVsync
         };
-        if self.surface_config.present_mode == new_mode {
-            return;
-        }
-        self.surface_config.present_mode = new_mode;
-        if self.is_surface_configured {
-            self.surface.configure(&self.device, &self.surface_config);
+
+        if self.surface_config.present_mode != new_mode {
+            self.surface_config.present_mode = new_mode;
+
+            if self.is_surface_configured {
+                self.surface.configure(&self.device, &self.surface_config);
+            }
         }
     }
 
-    /// Returns `true` when the surface format is BGRA (channels must be swapped for readback).
     pub fn is_bgra(&self) -> bool {
         matches!(
             self.surface_config.format,
             wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Bgra8UnormSrgb
         )
-    }
-
-    /// Add or remove `COPY_SRC` from the surface texture usage.
-    /// Required before reading back surface pixels for timelapse capture.
-    /// Reconfigures the surface immediately if it is already configured.
-    pub fn set_copy_src(&mut self, enabled: bool) {
-        let new_usage = if enabled {
-            wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC
-        } else {
-            wgpu::TextureUsages::RENDER_ATTACHMENT
-        };
-
-        if self.surface_config.usage != new_usage {
-            self.surface_config.usage = new_usage;
-            if self.is_surface_configured {
-                self.surface.configure(&self.device, &self.surface_config);
-            }
-        }
     }
 
     pub fn window(&self) -> &Window {

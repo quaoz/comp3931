@@ -8,7 +8,8 @@ use egui_wgpu::{
 use winit::{event::WindowEvent, window::Window};
 
 use crate::{
-    settings::{EnvironmentSettings, PlantType, Settings},
+    perf::PerfLogger,
+    settings::{EcosystemKernel, EnvironmentSettings, PlantType, SceneData, Settings},
     world::{CameraInfo, plants::PlantInstance, scenes::SceneStats},
 };
 
@@ -21,12 +22,6 @@ pub struct DebugInfo {
     pub rebuild_history: VecDeque<f32>,
     pub camera_pos: [f32; 3],
     pub scene: SceneStats,
-    pub timelapse_active: bool,
-    pub timelapse_frames: u32,
-    /// Path of the GIF being written (or last written).
-    pub timelapse_path: String,
-    /// Path of the last saved screenshot PNG (empty if none taken yet).
-    pub last_screenshot_path: String,
 }
 
 pub struct EguiRenderer {
@@ -42,7 +37,6 @@ impl EguiRenderer {
 
     pub fn new(device: &Device, output_colour_format: TextureFormat, window: &Window) -> Self {
         let egui_context = Context::default();
-
         let egui_state = egui_winit::State::new(
             egui_context,
             egui::viewport::ViewportId::ROOT,
@@ -51,6 +45,7 @@ impl EguiRenderer {
             None,
             Some(2 * 1024),
         );
+
         let egui_renderer = Renderer::new(device, output_colour_format, RendererOptions::default());
 
         Self {
@@ -147,6 +142,7 @@ pub fn controls_ui(
     settings: &mut Settings,
     debug: &DebugInfo,
     camera_info: &CameraInfo,
+    perf: &mut PerfLogger,
 ) -> UiActions {
     let mut actions = UiActions::default();
 
@@ -154,29 +150,50 @@ pub fn controls_ui(
         .default_width(250.0)
         .show(ctx, |ui| {
             egui::ScrollArea::vertical().show(ui, |ui| {
-                scene_ui(ui, settings, &mut actions);
+                scene_ui(ui, settings, &mut actions, debug);
                 ui.separator();
+
                 environment_ui(ui, &mut settings.env);
                 ui.separator();
+
                 camera_ui(ui, settings, camera_info, &mut actions);
                 ui.separator();
+
                 display_ui(ui, settings, &mut actions);
+
+                // Recording status badge
+                if perf.is_recording() {
+                    ui.separator();
+                    ui.colored_label(
+                        egui::Color32::from_rgb(220, 60, 60),
+                        format!("● REC  {:.0} s", perf.elapsed_secs()),
+                    );
+                }
             });
         });
 
     if settings.display.debug_mode {
-        debug_ui(ctx, debug);
+        debug_ui(ctx, debug, perf);
     }
 
     actions
 }
 
-fn scene_ui(ui: &mut egui::Ui, settings: &mut Settings, actions: &mut UiActions) {
+fn scene_ui(
+    ui: &mut egui::Ui,
+    settings: &mut Settings,
+    actions: &mut UiActions,
+    debug: &DebugInfo,
+) {
     CollapsingHeader::new("Scene")
         .default_open(true)
         .show(ui, |ui| {
-            scene_selector_ui(ui, settings, actions);
+            scene_selector_ui(ui, settings, actions, debug);
             ui.separator();
+
+            ecosystem_ui(ui, settings.scene.active_mut());
+            ui.separator();
+
             CollapsingHeader::new("Plants")
                 .default_open(false)
                 .show(ui, |ui| {
@@ -185,8 +202,12 @@ fn scene_ui(ui: &mut egui::Ui, settings: &mut Settings, actions: &mut UiActions)
         });
 }
 
-fn scene_selector_ui(ui: &mut egui::Ui, settings: &mut Settings, actions: &mut UiActions) {
-    // ── Selector ──────────────────────────────────────────────────────────────
+fn scene_selector_ui(
+    ui: &mut egui::Ui,
+    settings: &mut Settings,
+    actions: &mut UiActions,
+    _debug: &DebugInfo,
+) {
     let prev_active = settings.scene.active_scene;
     let scene_names: Vec<String> = settings
         .scene
@@ -220,18 +241,21 @@ fn scene_selector_ui(ui: &mut egui::Ui, settings: &mut Settings, actions: &mut U
     let mut save_name: String = ui
         .ctx()
         .data_mut(|d| d.get_temp(save_name_id).unwrap_or_default());
+
     ui.horizontal(|ui| {
         ui.add(
             egui::TextEdit::singleline(&mut save_name)
                 .hint_text(format!("Scene {}", settings.scene.scenes.len() + 1))
                 .desired_width(120.0),
         );
+
         if ui.button("Save").clicked() {
             let name = if save_name.trim().is_empty() {
                 format!("Scene {}", settings.scene.scenes.len() + 1)
             } else {
                 save_name.trim().to_string()
             };
+
             actions.save_scene = true;
             actions.save_scene_name = name;
             save_name = String::new();
@@ -262,8 +286,10 @@ fn scene_selector_ui(ui: &mut egui::Ui, settings: &mut Settings, actions: &mut U
                 if ui.add(DragValue::new(&mut scene.seed).speed(1.0)).changed()
                     && scene.seed != old_seed
                 {
+                    scene.ecosystem.mark_dirty();
                     dirty = true;
                 }
+
                 if ui
                     .small_button("⟳")
                     .on_hover_text("Randomise seed")
@@ -302,12 +328,14 @@ fn scene_selector_ui(ui: &mut egui::Ui, settings: &mut Settings, actions: &mut U
                 .changed();
             ui.end_row();
 
-            // Season dropdown — shows current season and jumps to the first week when changed.
+            // Season dropdown
             ui.label("Season");
             const SEASON_NAMES: [&str; 4] = ["Winter", "Spring", "Summer", "Autumn"];
             const SEASON_START: [u32; 4] = [0, 13, 26, 39];
+
             let cur_season_idx = (scene.date.week / 13).min(3) as usize;
             let mut sel_season = cur_season_idx;
+
             ComboBox::from_id_salt("scene_season_combo")
                 .selected_text(SEASON_NAMES[cur_season_idx])
                 .show_ui(ui, |ui| {
@@ -315,6 +343,7 @@ fn scene_selector_ui(ui: &mut egui::Ui, settings: &mut Settings, actions: &mut U
                         ui.selectable_value(&mut sel_season, i, name);
                     }
                 });
+
             if sel_season != cur_season_idx {
                 scene.date.week = SEASON_START[sel_season];
                 date_dirty = true;
@@ -476,6 +505,188 @@ fn plant_list_ui(ui: &mut egui::Ui, settings: &mut Settings) {
     }
 }
 
+fn ecosystem_ui(ui: &mut egui::Ui, scene: &mut SceneData) {
+    let eco = &mut scene.ecosystem;
+    CollapsingHeader::new("Ecosystem")
+        .default_open(true)
+        .show(ui, |ui| {
+            ui.strong("Placement");
+            Grid::new("ecosystem_placement_grid")
+                .num_columns(2)
+                .striped(true)
+                .show(ui, |ui| {
+                    ui.label("Area").on_hover_text(
+                        "Side length of the square region plants are scattered across",
+                    );
+                    if ui.add(Slider::new(&mut eco.area, 20.0..=300.0)).changed() {
+                        eco.mark_dirty();
+                    }
+                    ui.end_row();
+
+                    ui.label("Plants")
+                        .on_hover_text("Total number of plants to place in the scene.");
+                    if ui.add(Slider::new(&mut eco.num_plants, 1..=3000)).changed() {
+                        eco.mark_dirty();
+                    }
+                    ui.end_row();
+
+                    ui.label("Kernel").on_hover_text(
+                        "Spatial interaction kernel applied during placement:\n• Neutral — purely \
+                         random \n• Inhibitory — plants repel each other \n• Promotional — plants \
+                         attract each other \n•  Mixed — short-range inhibition, long-range \
+                         attraction",
+                    );
+                    let prev_kernel = eco.kernel;
+                    ComboBox::from_id_salt("eco_kernel_combo")
+                        .selected_text(eco.kernel.to_string())
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(
+                                &mut eco.kernel,
+                                EcosystemKernel::Neutral,
+                                "Neutral",
+                            );
+                            ui.selectable_value(
+                                &mut eco.kernel,
+                                EcosystemKernel::Inhibitory,
+                                "Inhibitory",
+                            );
+                            ui.selectable_value(
+                                &mut eco.kernel,
+                                EcosystemKernel::Promotional,
+                                "Promotional",
+                            );
+                            ui.selectable_value(&mut eco.kernel, EcosystemKernel::Mixed, "Mixed");
+                        });
+                    if eco.kernel != prev_kernel {
+                        eco.mark_dirty();
+                    }
+                    ui.end_row();
+
+                    ui.label("Kernel radius").on_hover_text(
+                        "Distance over which the spatial kernel acts. Larger values produce \
+                         broader clustering or exclusion zones.",
+                    );
+                    if ui
+                        .add(Slider::new(&mut eco.kernel_radius, 1.0..=50.0).logarithmic(true))
+                        .changed()
+                    {
+                        eco.mark_dirty();
+                    }
+                    ui.end_row();
+                });
+
+            // Species list
+            ui.strong("Species");
+            let mut species_dirty = false;
+            let mut remove_idx: Option<usize> = None;
+            for (i, (plant_type, weight)) in eco.species.iter_mut().enumerate() {
+                let prev_type = *plant_type;
+                ui.horizontal(|ui| {
+                    ComboBox::from_id_salt(format!("eco_sp_{i}"))
+                        .selected_text(plant_type.to_string())
+                        .width(90.0)
+                        .show_ui(ui, |ui| {
+                            for t in PlantType::ALL {
+                                ui.selectable_value(plant_type, t, t.to_string());
+                            }
+                        });
+                    species_dirty |= ui
+                        .add(
+                            Slider::new(weight, 0.1..=5.0)
+                                .text("weight")
+                                .fixed_decimals(1),
+                        )
+                        .on_hover_text(format!(
+                            "Relative abundance weight for placement sampling.\nShade tolerance: \
+                             {:.2}\nGrowth rate: {:.2}",
+                            plant_type.shade_tolerance(),
+                            plant_type.growth_rate(),
+                        ))
+                        .changed();
+                    if ui.small_button("x").clicked() {
+                        remove_idx = Some(i);
+                    }
+                });
+                if *plant_type != prev_type {
+                    species_dirty = true;
+                }
+            }
+            if let Some(i) = remove_idx {
+                eco.species.remove(i);
+                species_dirty = true;
+            }
+            let mut add_species: Option<PlantType> = None;
+            ComboBox::from_id_salt("eco_add_species_combo")
+                .selected_text("Add species")
+                .show_ui(ui, |ui| {
+                    for t in PlantType::ALL {
+                        ui.selectable_value(&mut add_species, Some(t), t.to_string());
+                    }
+                });
+            if let Some(t) = add_species {
+                eco.species.push((t, 1.0));
+                species_dirty = true;
+            }
+            if species_dirty {
+                eco.mark_dirty();
+            }
+
+            ui.strong("Self-Thinning");
+            Grid::new("ecosystem_thinning_grid")
+                .num_columns(2)
+                .striped(true)
+                .show(ui, |ui| {
+                    ui.label("Enabled").on_hover_text(
+                        "Remove plants that are too close together, simulating competition for \
+                         resources. Smaller plants are removed first.",
+                    );
+                    if ui.checkbox(&mut eco.use_self_thinning, "").changed() {
+                        eco.mark_dirty();
+                    }
+                    ui.end_row();
+
+                    ui.label("Thinning radius").on_hover_text(
+                        "Minimum allowed distance between plants. Plants closer than this may be \
+                         culled.",
+                    );
+                    if ui
+                        .add(Slider::new(&mut eco.thinning_radius, 1.0..=30.0))
+                        .changed()
+                    {
+                        eco.mark_dirty();
+                    }
+                    ui.end_row();
+                });
+
+            ui.strong("Succession");
+            Grid::new("ecosystem_succession_grid")
+                .num_columns(2)
+                .striped(true)
+                .show(ui, |ui| {
+                    ui.label("Enabled").on_hover_text(
+                        "Iteratively replace shade-intolerant species with more tolerant ones in \
+                         densely shaded areas, simulating long-term vegetation change.",
+                    );
+                    if ui.checkbox(&mut eco.use_succession, "").changed() {
+                        eco.mark_dirty();
+                    }
+                    ui.end_row();
+
+                    ui.label("Steps").on_hover_text(
+                        "Number of succession iterations to simulate. More steps produce a more \
+                         mature, climax community.",
+                    );
+                    if ui
+                        .add(Slider::new(&mut eco.succession_steps, 1..=30))
+                        .changed()
+                    {
+                        eco.mark_dirty();
+                    }
+                    ui.end_row();
+                });
+        });
+}
+
 fn environment_ui(ui: &mut egui::Ui, env: &mut EnvironmentSettings) {
     CollapsingHeader::new("Environment")
         .default_open(true)
@@ -616,10 +827,8 @@ fn environment_ui(ui: &mut egui::Ui, env: &mut EnvironmentSettings) {
                     }
                     ui.end_row();
 
-                    ui.label("Anim strength").on_hover_text(
-                        "Vertex-shader sway amplitude applied every frame. Set to 0 to freeze \
-                         geometry for screenshots. Uses the same direction as baked wind.",
-                    );
+                    ui.label("Anim strength")
+                        .on_hover_text("Vertex-shader sway amplitude applied every frame.");
                     ui.add(Slider::new(&mut env.wind_anim_strength, 0.0..=0.1).max_decimals(3));
                     ui.end_row();
                 });
@@ -988,48 +1197,54 @@ fn mini_bar_graph(
     thresholds: &[(f32, egui::Color32)],
     default_colour: egui::Color32,
 ) {
-    let graph_size = egui::Vec2::new(width, height);
-    let (response, painter) = ui.allocate_painter(graph_size, egui::Sense::hover());
-    let rect = response.rect;
-    painter.rect_filled(rect, 2.0, egui::Color32::from_black_alpha(120));
+    let (response, painter) =
+        ui.allocate_painter(egui::Vec2::new(width, height), egui::Sense::hover());
+    painter.rect_filled(response.rect, 2.0, egui::Color32::from_black_alpha(120));
     if history.is_empty() {
         return;
     }
-    let n = history.len();
-    let bar_w = rect.width() / n as f32;
+
+    let bar_w = response.rect.width() / history.len() as f32;
+
     for (i, &val) in history.iter().enumerate() {
-        let h = (val / max_val).min(1.0) * rect.height();
-        let x = rect.left() + i as f32 * bar_w;
+        let h = (val / max_val).min(1.0) * response.rect.height();
+        let x = response.rect.left() + i as f32 * bar_w;
+
         let colour = thresholds
             .iter()
             .find(|&&(t, _)| val > t)
             .map(|&(_, c)| c)
             .unwrap_or(default_colour);
+
         painter.rect_filled(
             egui::Rect::from_min_size(
-                egui::pos2(x, rect.bottom() - h),
+                egui::pos2(x, response.rect.bottom() - h),
                 egui::Vec2::new(bar_w.max(1.0), h),
             ),
             0.0,
             colour,
         );
     }
+
     for &(thresh, _) in thresholds {
-        let y = rect.bottom() - (thresh / max_val).min(1.0) * rect.height();
+        let y = response.rect.bottom() - (thresh / max_val).min(1.0) * response.rect.height();
         painter.line_segment(
-            [egui::pos2(rect.left(), y), egui::pos2(rect.right(), y)],
+            [
+                egui::pos2(response.rect.left(), y),
+                egui::pos2(response.rect.right(), y),
+            ],
             egui::Stroke::new(1.0, egui::Color32::from_gray(180)),
         );
     }
 }
 
-fn debug_ui(ctx: &Context, debug: &DebugInfo) {
+fn debug_ui(ctx: &Context, debug: &DebugInfo, perf: &mut PerfLogger) {
     egui::Window::new("Debug")
         .collapsible(false)
         .resizable(false)
         .anchor(egui::Align2::LEFT_TOP, [8.0, 8.0])
         .show(ctx, |ui| {
-            // ── Frame timing ──
+            // Frame timing
             ui.label(format!("FPS: {:.0}  ({:.2} ms)", debug.fps, debug.frame_ms));
             mini_bar_graph(
                 ui,
@@ -1044,12 +1259,12 @@ fn debug_ui(ctx: &Context, debug: &DebugInfo) {
                 egui::Color32::from_rgb(80, 200, 100),
             );
 
-            // ── Geometry ──
+            // Geometry
             ui.separator();
             ui.label(format!("Triangles: {}", debug.mesh_index_count / 3));
             ui.label(format!("Line verts: {}", debug.scene.line_vertex_count));
 
-            // ── Scene / LOD ──
+            // Scene / LOD
             ui.separator();
             ui.label(format!("Plants: {}", debug.scene.plant_count));
 
@@ -1092,7 +1307,7 @@ fn debug_ui(ctx: &Context, debug: &DebugInfo) {
                 );
             }
 
-            // ── Scene rebuilds ──
+            // Scene rebuilds
             ui.separator();
             if debug.scene.last_rebuild_ms > 0.0 {
                 let kind = if debug.scene.last_rebuild_full {
@@ -1133,9 +1348,73 @@ fn debug_ui(ctx: &Context, debug: &DebugInfo) {
                 );
             }
 
-            // ── Camera ──
+            // Camera
             ui.separator();
             let [x, y, z] = debug.camera_pos;
             ui.label(format!("Camera: ({x:.1}, {y:.1}, {z:.1})"));
+
+            // Performance recording
+            ui.separator();
+            ui.strong("Performance Recording");
+            if perf.is_recording() {
+                let elapsed = perf.elapsed_secs();
+                let s = &perf.summary;
+                ui.colored_label(
+                    egui::Color32::from_rgb(220, 60, 60),
+                    format!("● REC  {:.1} s  |  {} frames", elapsed, s.frame_count),
+                );
+                ui.label(format!(
+                    "Frame ms  min {:.1}  mean {:.1}  max {:.1}",
+                    s.min_frame_ms,
+                    s.mean_frame_ms(),
+                    s.max_frame_ms,
+                ));
+                if s.rebuild_count > 0 {
+                    ui.label(format!(
+                        "Rebuilds  {}  (mean {:.1} ms)",
+                        s.rebuild_count,
+                        s.mean_rebuild_ms(),
+                    ));
+                }
+                if let Some(f) = &perf.current_file {
+                    ui.label(egui::RichText::new(f.as_str()).small().weak());
+                }
+                if ui
+                    .button("■ Stop")
+                    .on_hover_text("Flush and close the CSV file")
+                    .clicked()
+                {
+                    perf.stop();
+                }
+            } else {
+                // Show summary from last session if available.
+                let s = &perf.summary;
+                if s.frame_count > 0 {
+                    ui.label(format!(
+                        "Last: {} frames  min {:.1}  mean {:.1}  max {:.1} ms",
+                        s.frame_count,
+                        s.min_frame_ms,
+                        s.mean_frame_ms(),
+                        s.max_frame_ms,
+                    ));
+                    if s.rebuild_count > 0 {
+                        ui.label(format!(
+                            "Rebuilds  {}  (mean {:.1} ms)",
+                            s.rebuild_count,
+                            s.mean_rebuild_ms(),
+                        ));
+                    }
+                    if let Some(f) = &perf.current_file {
+                        ui.label(egui::RichText::new(f.as_str()).small().weak());
+                    }
+                }
+                if ui
+                    .button("▶ Start Recording")
+                    .on_hover_text("Write per-frame CSV to the working directory")
+                    .clicked()
+                {
+                    perf.start();
+                }
+            }
         });
 }

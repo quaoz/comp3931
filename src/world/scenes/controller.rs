@@ -15,7 +15,7 @@ use crate::{
             LineGeometry, MeshGeometry, Turtle, combine_line_geometries, combine_mesh_geometries,
         },
     },
-    world::plants::PlantEnvironment,
+    world::{ecosystem::generate_ecosystem_plants, plants::PlantEnvironment},
 };
 
 /// Maximum number of vertices/indices per GPU buffer — must match the allocation in renderer.rs.
@@ -241,8 +241,11 @@ impl SceneController {
         let scene = settings.active_mut();
         let frustum = Frustum::from_view_proj(frame.view_proj);
 
+        let eco_changed = self.update_ecosystem(scene, active_scene_idx);
+
         let pressure_changed = (self.lod_pressure - self.last_pressure).abs() > 1e-4;
-        let full_rebuild = scene.generation != self.last_scene_gen
+        let full_rebuild = eco_changed
+            || scene.generation != self.last_scene_gen
             || env.generation != self.last_env_gen
             || self.plant_caches.len() != scene.plants.len()
             || pressure_changed;
@@ -318,6 +321,26 @@ impl SceneController {
             leaf_skip_near: 1.0 - (1.0 - lod.leaf_skip_near) * p,
             leaf_skip_mid: 1.0 - (1.0 - lod.leaf_skip_mid) * p,
             leaf_skip_far: 1.0 - (1.0 - lod.leaf_skip_far) * p,
+        }
+    }
+
+    /// Regenerates plants if the ecosystem or active scene has changed.
+    /// Returns true when a full rebuild is required as a result.
+    fn update_ecosystem(
+        &mut self,
+        scene: &mut crate::settings::SceneData,
+        active_scene_idx: usize,
+    ) -> bool {
+        if active_scene_idx != self.last_active_scene
+            || scene.ecosystem.generation != self.last_eco_gen
+        {
+            scene.plants = generate_ecosystem_plants(&scene.ecosystem, scene.seed);
+            self.last_eco_gen = scene.ecosystem.generation;
+            self.last_active_scene = active_scene_idx;
+            self.plant_caches.clear();
+            true
+        } else {
+            false
         }
     }
 

@@ -4,6 +4,7 @@ use crate::app::{App, AppEvent};
 
 pub mod app;
 pub mod graphics;
+pub mod perf;
 pub mod settings;
 pub mod state;
 pub mod util;
