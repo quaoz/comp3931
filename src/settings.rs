@@ -318,10 +318,6 @@ pub struct DisplaySettings {
     pub vsync: bool,
     /// Target frames per second. 0 = unlimited.
     pub frame_target: u32,
-    /// Timelapse GIF output width in pixels.
-    pub timelapse_width: u32,
-    /// Timelapse GIF output height in pixels.
-    pub timelapse_height: u32,
 }
 
 impl Default for DisplaySettings {
@@ -334,8 +330,6 @@ impl Default for DisplaySettings {
             debug_mode: false,
             vsync: true,
             frame_target: 0,
-            timelapse_width: 1920,
-            timelapse_height: 1080,
         }
     }
 }

@@ -129,25 +129,3 @@ fn forest_scene() -> SceneData {
         generation: 0,
     }
 }
-
-/// Generate forest plants from a seed so the layout changes with the scene seed.
-fn generate_forest_plants(seed: u64) -> Vec<PlantInstance> {
-    rng::seed(seed);
-    let types = [
-        PlantType::Tree,
-        PlantType::Tree,
-        PlantType::Fern,
-        PlantType::Bush,
-    ];
-    (0..12)
-        .map(|_| {
-            let x = rng::random_range(-40.0, 40.0);
-            let z = rng::random_range(-40.0, 40.0);
-            let age = rng::random_range(6.0, 6.5);
-            let scale = rng::random_range(8.0, 16.0);
-            let rotation = rng::random_range(0.0, 360.0);
-            let idx = (rng::random_range(0.0, types.len() as f32) as usize).min(types.len() - 1);
-            PlantInstance::new(types[idx], -age).with_transform([x, 0.0, z], scale, rotation)
-        })
-        .collect()
-}

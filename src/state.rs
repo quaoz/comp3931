@@ -190,7 +190,7 @@ impl State {
                 .into_iter()
                 .find(|s| s.name == self.settings.scene.scenes[active].name)
             {
-                default.generation = old_eco_gen.wrapping_add(1);
+                default.ecosystem.generation = old_eco_gen.wrapping_add(1);
                 default.mark_dirty();
                 self.settings.scene.scenes[active] = default;
             }

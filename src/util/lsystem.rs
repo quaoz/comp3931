@@ -178,8 +178,6 @@ impl<'a, S: Symbol> LSystem<'a, S> {
 
 #[cfg(test)]
 mod tests {
-    use std::fmt::Display;
-
     use super::*;
 
     // Symbol properties:
