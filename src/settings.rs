@@ -493,3 +493,116 @@ pub fn season_tint(season: f32) -> Vec3 {
         autumn_tint.lerp(winter_tint, (t - 0.5) * 2.0)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const EPS: f32 = 1e-5;
+
+    fn vec_approx_eq(a: Vec3, b: Vec3) -> bool {
+        (a - b).length() < EPS
+    }
+
+    // ── season_name ──
+
+    #[test]
+    fn season_name_covers_all_quadrants() {
+        assert_eq!(season_name(0.0), "Spring");
+        assert_eq!(season_name(0.25), "Summer");
+        assert_eq!(season_name(0.5), "Autumn");
+        assert_eq!(season_name(0.75), "Winter");
+    }
+
+    #[test]
+    fn season_name_wraps_at_1() {
+        assert_eq!(season_name(1.0), "Spring");
+        assert_eq!(season_name(1.25), "Summer");
+    }
+
+    #[test]
+    fn season_name_works_with_negative() {
+        // rem_euclid handles negative inputs
+        assert_eq!(season_name(-0.25), "Winter");
+    }
+
+    // ── season_tint ──
+
+    #[test]
+    fn season_tint_summer_is_white() {
+        assert!(vec_approx_eq(season_tint(0.25), Vec3::ONE));
+    }
+
+    #[test]
+    fn season_tint_winter_is_cool() {
+        let tint = season_tint(0.75);
+        // Should be the winter tint (0.75, 0.75, 0.85)
+        assert!(vec_approx_eq(tint, Vec3::new(0.75, 0.75, 0.85)));
+    }
+
+    #[test]
+    fn season_tint_is_continuous() {
+        // Small step from summer shouldn't jump to a very different tint
+        let at_summer = season_tint(0.25);
+        let near_summer = season_tint(0.26);
+        assert!((at_summer - near_summer).length() < 0.1);
+    }
+
+    // ── generation counters (mark_dirty) ──
+
+    #[test]
+    fn environment_mark_dirty_increments_generation() {
+        let mut env = EnvironmentSettings::default();
+        assert_eq!(env.generation, 0);
+        env.mark_dirty();
+        assert_eq!(env.generation, 1);
+        env.mark_dirty();
+        assert_eq!(env.generation, 2);
+    }
+
+    #[test]
+    fn ecosystem_mark_dirty_increments_generation() {
+        let mut eco = EcosystemSettings::default();
+        assert_eq!(eco.generation, 0);
+        eco.mark_dirty();
+        assert_eq!(eco.generation, 1);
+    }
+
+    #[test]
+    fn scene_mark_dirty_increments_generation() {
+        let mut scene = SceneData {
+            name: "test".into(),
+            plants: vec![],
+            global_scale: 1.0,
+            date: WorldDate::default(),
+            seed: 0,
+            ecosystem: EcosystemSettings::default(),
+            generation: 0,
+        };
+        scene.mark_dirty();
+        assert_eq!(scene.generation, 1);
+    }
+
+    // ── PlantType properties ──
+
+    #[test]
+    fn plant_type_shade_tolerance_in_range() {
+        for &pt in &PlantType::ALL {
+            let t = pt.shade_tolerance();
+            assert!(
+                (0.0..=1.0).contains(&t),
+                "{pt:?} shade tolerance {t} out of [0,1]"
+            );
+        }
+    }
+
+    #[test]
+    fn plant_type_growth_rate_positive() {
+        for &pt in &PlantType::ALL {
+            assert!(
+                pt.growth_rate() > 0.0,
+                "{pt:?} growth rate must be positive"
+            );
+        }
+    }
+}

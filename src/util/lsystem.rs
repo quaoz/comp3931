@@ -91,6 +91,48 @@ pub enum Rule<'a, S: Symbol> {
     ContextSensitive(S, Option<S>, Option<S>, &'a [S]),
 }
 
+impl<S: Symbol + Display> Display for Rule<'_, S> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Normal(s, res) => write!(
+                f,
+                "{} \\rightarrow {}",
+                s,
+                res.iter()
+                    .map(|s| s.to_string())
+                    .collect::<Vec<String>>()
+                    .concat()
+            ),
+            Self::Stochastic(s, prob, res) => write!(
+                f,
+                "{} \\xrightarrow{{{}}} {}",
+                s,
+                prob,
+                res.iter()
+                    .map(|s| s.to_string())
+                    .collect::<Vec<String>>()
+                    .concat()
+            ),
+            Self::Parametric(s, _) => write!(f, "{}: cond \\rightarrow res", s),
+            Self::ContextSensitive(s, l, r, res) => {
+                let left = l.map_or_else(String::new, |l| format!("{l} < "));
+                let right = r.map_or_else(String::new, |r| format!(" > {r}"));
+                write!(
+                    f,
+                    "{}{}{} \\rightarrow {}",
+                    left,
+                    s,
+                    right,
+                    res.iter()
+                        .map(|s| s.to_string())
+                        .collect::<Vec<String>>()
+                        .concat()
+                )
+            }
+        }
+    }
+}
+
 impl<S: Symbol> Rule<'_, S> {
     fn priority(&self) -> u8 {
         match self {
@@ -137,6 +179,26 @@ impl<S: Symbol> Rule<'_, S> {
 pub struct LSystem<'a, S: Symbol> {
     state: Vec<S>,
     rules: Vec<Rule<'a, S>>,
+}
+
+impl<S: Symbol + Display> Display for LSystem<'_, S> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            " \\omega &: {}\\{}",
+            self.state
+                .iter()
+                .map(|s| s.to_string())
+                .collect::<Vec<String>>()
+                .concat(),
+            self.rules
+                .iter()
+                .enumerate()
+                .map(|(i, r)| format!("\n p_{i} &: {r} \\\\"))
+                .collect::<Vec<String>>()
+                .concat()
+        )
+    }
 }
 
 impl<'a, S: Symbol> LSystem<'a, S> {

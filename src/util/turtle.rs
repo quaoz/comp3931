@@ -937,3 +937,416 @@ pub fn combine_mesh_geometries(geos: &[&MeshGeometry]) -> MeshGeometry {
         tangents,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use glam::{Vec3, vec3};
+
+    use super::*;
+
+    fn white_turtle() -> Turtle {
+        Turtle::new(Vec3::ZERO, Vec3::ONE)
+    }
+
+    // ── Line geometry ──
+
+    #[test]
+    fn fresh_turtle_has_no_line_segments() {
+        let t = white_turtle();
+        let geo = t.line_geometry();
+        assert!(geo.segments.is_empty());
+        assert!(geo.indices.is_empty());
+    }
+
+    #[test]
+    fn travel_produces_one_segment() {
+        let mut t = white_turtle();
+        t.travel(1.0);
+        let geo = t.line_geometry();
+        assert_eq!(geo.segments.len(), 1);
+        assert_eq!(geo.vertices.len(), 2);
+        // Default heading is Vec3::X, so endpoint is (1, 0, 0)
+        assert!((geo.vertices[1] - vec3(1.0, 0.0, 0.0)).length() < 1e-5);
+    }
+
+    #[test]
+    fn push_pop_restores_position_for_travel() {
+        let mut t = white_turtle();
+        t.travel(1.0);
+        t.push();
+        t.turn(std::f32::consts::FRAC_PI_2);
+        t.travel(5.0); // travels in a different direction
+        t.pop();
+        t.travel(2.0); // should continue from (1,0,0) along Vec3::X
+        let geo = t.line_geometry();
+        // Last vertex of the main branch is at (3, 0, 0)
+        let last = *geo.vertices.last().unwrap();
+        assert!((last - vec3(3.0, 0.0, 0.0)).length() < 1e-4);
+    }
+
+    #[test]
+    fn combine_line_geometries_merges_indices() {
+        let mut t1 = white_turtle();
+        t1.travel(1.0);
+        let mut t2 = white_turtle();
+        t2.travel(2.0);
+        let geo1 = t1.line_geometry();
+        let geo2 = t2.line_geometry();
+        let combined = combine_line_geometries(&[&geo1, &geo2]);
+        assert_eq!(combined.vertices.len(), 4); // 2 + 2
+        assert_eq!(combined.segments.len(), 2);
+    }
+
+    // ── Mesh geometry ──
+
+    #[test]
+    fn fresh_turtle_has_no_mesh() {
+        let t = white_turtle();
+        let geo = t.mesh_geometry();
+        assert!(geo.vertices.is_empty());
+        assert!(geo.indices.is_empty());
+    }
+
+    #[test]
+    fn branch_generates_cylinder_geometry() {
+        let mut t = white_turtle();
+        t.branch(1.0, 0.1);
+        let geo = t.mesh_geometry();
+        // Default 8 segments: base ring (8) + tip ring (8) = 16 vertices
+        // Each of 8 segments produces 2 triangles = 6 indices each → 48 total
+        assert_eq!(geo.vertices.len(), 16);
+        assert_eq!(geo.indices.len(), 48);
+    }
+
+    #[test]
+    fn branch_lod_zero_segments_skips_mesh() {
+        let mut t = white_turtle();
+        t.set_lod(0, 0.0);
+        t.branch(1.0, 0.1);
+        assert!(t.mesh_geometry().vertices.is_empty());
+    }
+
+    #[test]
+    fn branch_below_min_radius_skips_mesh() {
+        let mut t = white_turtle();
+        t.set_lod(8, 1.0); // min_radius = 1.0, branch radius ≈ 0.05
+        t.branch(1.0, 0.1);
+        assert!(t.mesh_geometry().vertices.is_empty());
+    }
+
+    #[test]
+    fn leaf_generates_double_sided_quad() {
+        let mut t = white_turtle();
+        t.leaf(0.5, 1.0);
+        let geo = t.mesh_geometry();
+        // Front face: 4 verts, back face: 4 verts = 8 total
+        // Front: 6 indices, back: 6 indices = 12 total
+        assert_eq!(geo.vertices.len(), 8);
+        assert_eq!(geo.indices.len(), 12);
+    }
+
+    #[test]
+    fn multiple_leaves_accumulate() {
+        let mut t = white_turtle();
+        t.leaf(0.5, 1.0);
+        t.leaf(0.5, 1.0);
+        let geo = t.mesh_geometry();
+        assert_eq!(geo.vertices.len(), 16);
+        assert_eq!(geo.indices.len(), 24);
+    }
+
+    // ── Cut symbol ──
+
+    #[test]
+    fn cut_inside_branch_skips_to_pop() {
+        let mut t = white_turtle();
+        t.do_actions(&[
+            Action::Push,
+            Action::Cut,
+            Action::Leaf(0.5, 1.0), // should be skipped
+            Action::Pop,
+        ]);
+        // Leaf was skipped, so no mesh
+        assert!(t.mesh_geometry().vertices.is_empty());
+    }
+
+    #[test]
+    fn cut_at_depth_zero_is_ignored() {
+        let mut t = white_turtle();
+        t.do_actions(&[
+            Action::Cut,            // no effect at depth 0
+            Action::Leaf(0.5, 1.0), // should execute normally
+        ]);
+        assert_eq!(t.mesh_geometry().vertices.len(), 8);
+    }
+
+    #[test]
+    fn cut_only_affects_enclosing_branch() {
+        let mut t = white_turtle();
+        t.do_actions(&[
+            Action::Push,
+            Action::Cut,
+            Action::Leaf(0.5, 1.0), // skipped
+            Action::Pop,
+            Action::Leaf(0.5, 1.0), // should still execute
+        ]);
+        assert_eq!(t.mesh_geometry().vertices.len(), 8);
+    }
+
+    // ── Space pruning (voxel occupancy) ──
+
+    #[test]
+    fn space_pruning_intra_plant_branches_never_block_each_other() {
+        // Within a single plant build, branches should not prune each other even if they
+        // head in the same direction — intra-plant marks live in current_plant_marks which
+        // is not checked during is_cell_occupied().
+        let mut t = white_turtle();
+        t.set_space_pruning(true, 0.5);
+        t.do_actions(&[Action::Push, Action::Branch(1.0, 0.1), Action::Pop]);
+        let first_count = t.mesh_geometry().indices.len();
+        assert!(first_count > 0);
+        // Second identical branch from same plant — should NOT be pruned
+        t.do_actions(&[Action::Push, Action::Branch(1.0, 0.1), Action::Pop]);
+        assert_eq!(t.mesh_geometry().indices.len(), first_count * 2);
+    }
+
+    #[test]
+    fn space_pruning_inter_plant_branches_are_blocked() {
+        // After reset(), the first plant's marks are flushed into occupancy_grid.
+        // A second plant building into the same voxels should be pruned.
+        let mut t = white_turtle();
+        t.set_space_pruning(true, 0.5);
+        // Plant 1
+        t.do_actions(&[Action::Push, Action::Branch(1.0, 0.1), Action::Pop]);
+        let after_p1 = t.mesh_geometry().indices.len();
+        assert!(after_p1 > 0);
+        // Simulate next plant: reset() flushes plant 1 marks into grid
+        t.reset(Vec3::ZERO, Vec3::ONE);
+        t.set_space_pruning(true, 0.5);
+        // Plant 2 — same direction, same voxel — should be pruned
+        t.do_actions(&[Action::Push, Action::Branch(1.0, 0.1), Action::Pop]);
+        // No new mesh was added (plant 2's branch was cut)
+        assert_eq!(t.mesh_geometry().indices.len(), 0);
+    }
+
+    #[test]
+    fn space_pruning_blocks_mid_segment_overlap() {
+        // Plant 1 builds a short branch occupying cells 0..1 along X.
+        // Plant 2 starts further along X so its TIP doesn't overlap, but its
+        // mid-segment passes through a cell plant 1 marked.
+        // With tip-only checking this would not be caught; with full-segment
+        // checking it should be pruned.
+        let mut t = white_turtle();
+        t.set_space_pruning(true, 1.0); // 1-unit cells
+        // Plant 1: branch from (0,0,0) in +X direction, length 1 → marks cell (0,0,0)
+        t.do_actions(&[Action::Push, Action::Branch(1.0, 0.1), Action::Pop]);
+        assert!(!t.mesh_geometry().indices.is_empty());
+
+        // Flush plant 1 marks into the grid
+        t.reset(Vec3::ZERO, Vec3::ONE);
+        t.set_space_pruning(true, 1.0);
+        // Plant 2: start at (-0.5, 0, 0), still heading +X, length 2.
+        // Tip lands at (1.5, 0, 0) — cell (1,0,0) which is NOT occupied.
+        // But the segment passes through (0,0,0) which IS occupied by plant 1.
+        t.reset(Vec3::new(-0.5, 0.0, 0.0), Vec3::ONE);
+        t.set_space_pruning(true, 1.0);
+        t.do_actions(&[Action::Push, Action::Branch(2.0, 0.1), Action::Pop]);
+        // Should be pruned because the mid-segment overlaps plant 1's cell
+        assert_eq!(t.mesh_geometry().indices.len(), 0);
+    }
+
+    #[test]
+    fn space_pruning_considers_branch_width() {
+        // Two parallel branches with axes that don't intersect, but whose cylinders overlap.
+        // Plant 1: axis along +X at Y=0, diameter=2.0 → radius=1.0, cell_size=1.0 → r_cells=1.
+        //   Marks cells within 1 cell of the axis, including Y=1 cells.
+        // Plant 2: axis along +X at Y=0.8 (offset in Y). Without width expansion the axes
+        //   don't share a cell; with width expansion they do.
+        let mut t = white_turtle();
+        t.set_space_pruning(true, 1.0);
+        // Plant 1: fat branch (diameter 2.0 → radius 1.0) along +X at origin
+        t.do_actions(&[Action::Push, Action::Branch(1.0, 2.0), Action::Pop]);
+        assert!(!t.mesh_geometry().indices.is_empty());
+
+        // Flush plant 1 marks
+        t.reset(Vec3::ZERO, Vec3::ONE);
+        // Plant 2: thin branch at Y=0.8 (different axis, tips at different cells).
+        // Without width expansion: axis at Y=0.8 falls in cell Y=0, same cell — still blocked.
+        // So use Y=1.2 to ensure the axis is in a different cell (Y=1), but within radius of plant 1.
+        t.reset(Vec3::new(0.0, 1.2, 0.0), Vec3::ONE);
+        t.set_space_pruning(true, 1.0);
+        t.do_actions(&[Action::Push, Action::Branch(1.0, 2.0), Action::Pop]);
+        // Plant 1's radius expansion marks Y=1 cells; plant 2's base radius also expands.
+        // Plant 2 should be blocked because plant 1's marked region overlaps its cylinder.
+        assert_eq!(t.mesh_geometry().indices.len(), 0);
+    }
+
+    #[test]
+    fn space_pruning_allows_well_separated_branches() {
+        // Branches far enough apart (beyond both radii) should not block each other.
+        let mut t = white_turtle();
+        t.set_space_pruning(true, 1.0);
+        // Plant 1: axis at Y=0, diameter=0.4 → radius=0.2, r_cells=0 (< cell_size).
+        t.do_actions(&[Action::Push, Action::Branch(1.0, 0.4), Action::Pop]);
+        assert!(!t.mesh_geometry().indices.is_empty());
+
+        t.reset(Vec3::ZERO, Vec3::ONE);
+        // Plant 2: axis at Y=3.0 — well outside any marked cell.
+        t.reset(Vec3::new(0.0, 3.0, 0.0), Vec3::ONE);
+        t.set_space_pruning(true, 1.0);
+        t.do_actions(&[Action::Push, Action::Branch(1.0, 0.4), Action::Pop]);
+        assert!(
+            !t.mesh_geometry().indices.is_empty(),
+            "well-separated branch should not be pruned"
+        );
+    }
+
+    #[test]
+    fn space_pruning_disabled_allows_overlapping_branches() {
+        let mut t = white_turtle();
+        t.set_space_pruning(false, 0.5);
+        t.do_actions(&[Action::Push, Action::Branch(1.0, 0.1), Action::Pop]);
+        let first_count = t.mesh_geometry().indices.len();
+        t.do_actions(&[Action::Push, Action::Branch(1.0, 0.1), Action::Pop]);
+        assert_eq!(t.mesh_geometry().indices.len(), first_count * 2);
+    }
+
+    // ── Combine mesh geometries ──
+
+    #[test]
+    fn combine_mesh_geometries_offsets_indices() {
+        let mut t = white_turtle();
+        t.leaf(0.5, 1.0); // 8 vertices, indices 0..7
+        let geo1 = t.mesh_geometry();
+
+        let mut t2 = white_turtle();
+        t2.leaf(0.5, 1.0); // 8 vertices, indices 0..7 (before offset)
+        let geo2 = t2.mesh_geometry();
+
+        let combined = combine_mesh_geometries(&[&geo1, &geo2]);
+        assert_eq!(combined.vertices.len(), 16);
+        // Indices in second geo should be offset by 8
+        assert!(combined.indices.iter().all(|&i| i < 16));
+        assert!(combined.indices[12..].iter().all(|&i| i >= 8));
+    }
+
+    // ── mesh_index_count ──
+
+    #[test]
+    fn mesh_index_count_matches_geometry() {
+        let mut t = white_turtle();
+        t.branch(1.0, 0.1);
+        t.leaf(0.5, 1.0);
+        let geo = t.mesh_geometry();
+        assert_eq!(t.mesh_index_count(), geo.indices.len() as u32);
+    }
+
+    // ── Orientation: turn / roll / pitch ──
+
+    #[test]
+    fn turn_rotates_heading_left() {
+        // Default: heading=+X, normal=+Y.
+        // turn(PI/2) rotates heading around +Y by PI/2 → heading becomes -Z.
+        // Travelling then moves to (0, 0, -1).
+        let mut t = white_turtle();
+        t.turn(std::f32::consts::FRAC_PI_2);
+        t.travel(1.0);
+        let geo = t.line_geometry();
+        let tip = geo.vertices[1];
+        assert!((tip - vec3(0.0, 0.0, -1.0)).length() < 1e-5, "tip={tip:?}");
+    }
+
+    #[test]
+    fn roll_does_not_change_heading() {
+        // roll rotates the normal around the heading — heading itself is unchanged.
+        let mut t = white_turtle();
+        t.roll(std::f32::consts::FRAC_PI_2);
+        t.travel(1.0);
+        let geo = t.line_geometry();
+        let tip = geo.vertices[1];
+        assert!((tip - vec3(1.0, 0.0, 0.0)).length() < 1e-5, "tip={tip:?}");
+    }
+
+    #[test]
+    fn pitch_tilts_heading_upward() {
+        // Default: heading=+X, normal=+Y, binormal=X×Y=+Z.
+        // pitch(PI/2) rotates heading (and normal) around +Z by PI/2 → heading=+Y.
+        let mut t = white_turtle();
+        t.pitch(std::f32::consts::FRAC_PI_2);
+        t.travel(1.0);
+        let geo = t.line_geometry();
+        let tip = geo.vertices[1];
+        assert!((tip - vec3(0.0, 1.0, 0.0)).length() < 1e-5, "tip={tip:?}");
+    }
+
+    // ── Scale ──
+
+    #[test]
+    fn scale_multiplies_travel_distance() {
+        let mut t = white_turtle();
+        t.set_scale(2.0);
+        t.travel(1.0);
+        let geo = t.line_geometry();
+        let tip = geo.vertices[1];
+        assert!((tip - vec3(2.0, 0.0, 0.0)).length() < 1e-5, "tip={tip:?}");
+    }
+
+    // ── LOD segment count ──
+
+    #[test]
+    fn lod_segment_count_controls_branch_vertices() {
+        let mut t = white_turtle();
+        t.set_lod(4, 0.0);
+        t.branch(1.0, 0.1);
+        let geo = t.mesh_geometry();
+        // 4 segments × 2 verts (base+tip) = 8 vertices; 4 × 6 indices = 24
+        assert_eq!(geo.vertices.len(), 8, "expected 8 verts for 4 segments");
+        assert_eq!(geo.indices.len(), 24, "expected 24 indices for 4 segments");
+    }
+
+    // ── Nested push/pop ──
+
+    #[test]
+    fn nested_push_pop_restores_to_outer_state() {
+        // travel(1) → (1,0,0)
+        // push; turn(PI/2) → heading=-Z
+        //   push; turn(PI/2) → heading=-X; travel(5) → (-4,0,0)
+        //   pop  → restored to (1,0,0), heading=-Z
+        //   travel(1) → (1,0,-1)
+        // pop  → restored to (1,0,0), heading=+X
+        // travel(2) → (3,0,0)
+        let mut t = white_turtle();
+        t.travel(1.0);
+        t.push();
+        t.turn(std::f32::consts::FRAC_PI_2); // heading → -Z
+        t.push();
+        t.turn(std::f32::consts::FRAC_PI_2); // heading → -X
+        t.travel(5.0);
+        t.pop();
+        t.travel(1.0); // should go (1,0,0)→(1,0,-1)
+        t.pop();
+        t.travel(2.0); // should go (1,0,0)→(3,0,0)
+        let geo = t.line_geometry();
+        let last = *geo.vertices.last().unwrap();
+        assert!(
+            (last - vec3(3.0, 0.0, 0.0)).length() < 1e-4,
+            "last={last:?}"
+        );
+    }
+
+    // ── Leaf skip probability ──
+
+    #[test]
+    fn leaf_skip_prob_one_skips_all_leaves() {
+        // Seeded deterministically — but prob=1.0 means random_range(0,1) < 1.0 is
+        // always true, so every leaf is skipped regardless of RNG.
+        use crate::util::rng;
+        rng::seed(0);
+        let mut t = white_turtle();
+        t.set_leaf_skip_prob(1.0);
+        for _ in 0..10 {
+            t.leaf(0.5, 1.0);
+        }
+        assert!(t.mesh_geometry().vertices.is_empty());
+    }
+}
