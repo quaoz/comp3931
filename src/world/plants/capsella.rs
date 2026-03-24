@@ -1,13 +1,4 @@
 //! Capsella (Shepherd's Purse) inspired by "The Algorithmic Beauty of Plants" fig 3.5, pg 74.
-//!
-//! Two-phase development matching the ABOP model:
-//!   - Vegetative apex `a(t)` counts down for `n_vegetative` steps, producing leaves
-//!     with golden-angle (137.5°) phyllotaxis, before switching to flowering apex `A`.
-//!   - Flowering apex `A` produces lateral branches via golden-angle divergence; each
-//!     branch contains an angle accumulator `u(t)` that adds 9° of downward pitch per
-//!     step, gradually drooping the branch as the fruit matures (ABOP productions p6/p7).
-//!   - Fruit pod `X(t)` counts down inside the lateral branch; the pod grows to full
-//!     size once `t = 0`.
 
 use std::fmt::Display;
 
@@ -16,11 +7,11 @@ use glam::{Vec3, vec3};
 use crate::{
     settings::PlantType,
     util::{
-        lsystem::{LSystem, Rule, Symbol, SymbolType},
-        rng,
+        lsystem::{LSystem, Rule, Symbol, SymbolType, fmt_angle},
         turtle::Action,
+        widget,
     },
-    world::plants::{Plant, PlantEnvironment},
+    world::plants::Species,
 };
 
 #[derive(Clone)]
@@ -33,11 +24,8 @@ pub struct CapsellaParams {
     pub leaf_height: f32,
     pub flower_size: f32,
     pub pod_size: f32,
-    /// Initial lateral-branch droop angle — `&(18)` in ABOP.
     pub branch_angle_deg: f32,
-    /// Leaf pitch below horizontal — `&(70)` in ABOP.
     pub leaf_angle_deg: f32,
-    /// Vegetative steps before transition to flowering apex — `a(13)` in ABOP.
     pub n_vegetative: u32,
     pub i_init: f32,
     pub i_max: f32,
@@ -67,232 +55,103 @@ impl Default for CapsellaParams {
     }
 }
 
-pub struct CapsellaPlant {
-    iteration: u32,
-    dirty: bool,
-    cached_actions: Vec<Action>,
-    pub params: CapsellaParams,
-    last_season: f32,
-    dormancy_offset: f32,
-}
+pub struct Capsella;
 
-impl Default for CapsellaPlant {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+impl Species for Capsella {
+    type Params = CapsellaParams;
 
-impl CapsellaPlant {
-    pub fn new() -> Self {
-        let params = CapsellaParams::default();
-        let dormancy_offset = rng::random_range(-0.05, 0.05);
-        let actions = generate(0, &params, 0.25, dormancy_offset);
-        Self {
-            iteration: 0,
-            dirty: false,
-            cached_actions: actions,
-            params,
-            last_season: 0.25,
-            dormancy_offset,
-        }
-    }
-}
+    const TYPE: PlantType = PlantType::Capsella;
 
-impl Plant for CapsellaPlant {
-    fn plant_type(&self) -> PlantType {
-        PlantType::Capsella
+    fn generate(age: u32, p: &CapsellaParams, season: f32, dormancy_offset: f32) -> Vec<Action> {
+        generate(age, p, season, dormancy_offset)
     }
 
-    fn iteration(&self) -> u32 {
-        self.iteration
+    fn max_iterations(p: &CapsellaParams) -> u32 {
+        p.max_iterations
     }
 
-    fn max_iterations(&self) -> u32 {
-        self.params.max_iterations
+    fn colour(p: &CapsellaParams, _iteration: u32) -> Vec3 {
+        p.stem_colour
     }
 
-    fn set_iteration(&mut self, iteration: u32) {
-        if self.iteration != iteration {
-            self.iteration = iteration;
-            self.dirty = true;
-        }
-    }
-
-    fn colour(&self) -> Vec3 {
-        self.params.stem_colour
-    }
-
-    fn ui(&mut self, ui: &mut egui::Ui) -> bool {
+    fn ui(p: &mut CapsellaParams, ui: &mut egui::Ui) -> bool {
         let mut changed = false;
-        let p = &mut self.params;
 
         egui::Grid::new("capsella_params")
             .num_columns(2)
             .spacing([8.0, 4.0])
             .show(ui, |ui| {
-                ui.label("Max iterations");
-                let mut a = p.max_iterations as i32;
-                if ui
-                    .add(egui::DragValue::new(&mut a).range(1..=100))
-                    .changed()
-                {
-                    p.max_iterations = a as u32;
-                    changed = true;
-                }
-                ui.end_row();
-
-                ui.label("Vegetative steps");
-                let mut n = p.n_vegetative as i32;
-                if ui.add(egui::Slider::new(&mut n, 1..=20)).changed() {
-                    p.n_vegetative = n as u32;
-                    changed = true;
-                }
-                ui.end_row();
-
-                ui.label("Branch angle");
-                if ui
-                    .add(egui::Slider::new(&mut p.branch_angle_deg, 5.0..=60.0).suffix("°"))
-                    .changed()
-                {
-                    changed = true;
-                }
-                ui.end_row();
-
-                ui.label("Leaf angle");
-                if ui
-                    .add(egui::Slider::new(&mut p.leaf_angle_deg, 5.0..=85.0).suffix("°"))
-                    .changed()
-                {
-                    changed = true;
-                }
-                ui.end_row();
-
-                ui.label("Internode length");
-                if ui
-                    .add(egui::Slider::new(&mut p.i_init, 0.01..=0.2).max_decimals(3))
-                    .changed()
-                {
-                    changed = true;
-                }
-                ui.end_row();
-
-                ui.label("Branch radius");
-                if ui
-                    .add(egui::Slider::new(&mut p.branch_radius, 0.002..=0.05).max_decimals(4))
-                    .changed()
-                {
-                    changed = true;
-                }
-                ui.end_row();
-
-                ui.label("Internode max");
-                if ui
-                    .add(egui::Slider::new(&mut p.i_max, 0.05..=0.4).max_decimals(3))
-                    .changed()
-                {
-                    changed = true;
-                }
-                ui.end_row();
-
-                ui.label("Internode growth");
-                if ui
-                    .add(egui::Slider::new(&mut p.i_growth, 1.0..=1.5).max_decimals(2))
-                    .changed()
-                {
-                    changed = true;
-                }
-                ui.end_row();
-
-                ui.label("Flower size");
-                if ui
-                    .add(egui::Slider::new(&mut p.flower_size, 0.005..=0.12).max_decimals(3))
-                    .changed()
-                {
-                    changed = true;
-                }
-                ui.end_row();
-
-                ui.label("Pod size");
-                if ui
-                    .add(egui::Slider::new(&mut p.pod_size, 0.005..=0.12).max_decimals(3))
-                    .changed()
-                {
-                    changed = true;
-                }
-                ui.end_row();
-
-                ui.label("Leaf width");
-                changed |= ui
-                    .add(egui::Slider::new(&mut p.leaf_width, 0.01..=0.2).max_decimals(3))
-                    .changed();
-                ui.end_row();
-
-                ui.label("Leaf height");
-                changed |= ui
-                    .add(egui::Slider::new(&mut p.leaf_height, 0.01..=0.3).max_decimals(3))
-                    .changed();
-                ui.end_row();
-
-                ui.label("Stem colour");
-                let mut rgb = p.stem_colour.to_array();
-                if ui.color_edit_button_rgb(&mut rgb).changed() {
-                    p.stem_colour = Vec3::from(rgb);
-                    changed = true;
-                }
-                ui.end_row();
-
-                ui.label("Flower colour");
-                let mut rgb = p.flower_colour.to_array();
-                if ui.color_edit_button_rgb(&mut rgb).changed() {
-                    p.flower_colour = Vec3::from(rgb);
-                    changed = true;
-                }
-                ui.end_row();
-
-                ui.label("Pod colour");
-                let mut rgb = p.pod_colour.to_array();
-                if ui.color_edit_button_rgb(&mut rgb).changed() {
-                    p.pod_colour = Vec3::from(rgb);
-                    changed = true;
-                }
-                ui.end_row();
+                changed |= widget::row(
+                    ui,
+                    "Max iterations",
+                    egui::DragValue::new(&mut p.max_iterations).range(1..=100),
+                );
+                changed |= widget::row(
+                    ui,
+                    "Vegetative steps",
+                    egui::Slider::new(&mut p.n_vegetative, 1..=20),
+                );
+                changed |= widget::row(
+                    ui,
+                    "Branch angle",
+                    egui::Slider::new(&mut p.branch_angle_deg, 5.0..=60.0).suffix("°"),
+                );
+                changed |= widget::row(
+                    ui,
+                    "Leaf angle",
+                    egui::Slider::new(&mut p.leaf_angle_deg, 5.0..=85.0).suffix("°"),
+                );
+                changed |= widget::row(
+                    ui,
+                    "Internode length",
+                    egui::Slider::new(&mut p.i_init, 0.01..=0.2).max_decimals(3),
+                );
+                changed |= widget::row(
+                    ui,
+                    "Branch radius",
+                    egui::Slider::new(&mut p.branch_radius, 0.002..=0.05).max_decimals(4),
+                );
+                changed |= widget::row(
+                    ui,
+                    "Internode max",
+                    egui::Slider::new(&mut p.i_max, 0.05..=0.4).max_decimals(3),
+                );
+                changed |= widget::row(
+                    ui,
+                    "Internode growth",
+                    egui::Slider::new(&mut p.i_growth, 1.0..=1.5).max_decimals(2),
+                );
+                changed |= widget::row(
+                    ui,
+                    "Flower size",
+                    egui::Slider::new(&mut p.flower_size, 0.005..=0.12).max_decimals(3),
+                );
+                changed |= widget::row(
+                    ui,
+                    "Pod size",
+                    egui::Slider::new(&mut p.pod_size, 0.005..=0.12).max_decimals(3),
+                );
+                changed |= widget::row(
+                    ui,
+                    "Leaf width",
+                    egui::Slider::new(&mut p.leaf_width, 0.01..=0.2).max_decimals(3),
+                );
+                changed |= widget::row(
+                    ui,
+                    "Leaf height",
+                    egui::Slider::new(&mut p.leaf_height, 0.01..=0.3).max_decimals(3),
+                );
+                changed |= widget::colour_row(ui, "Stem colour", &mut p.stem_colour);
+                changed |= widget::colour_row(ui, "Flower colour", &mut p.flower_colour);
+                changed |= widget::colour_row(ui, "Pod colour", &mut p.pod_colour);
             });
 
         if ui.button("Reset").clicked() {
-            self.params = CapsellaParams::default();
+            *p = CapsellaParams::default();
             changed = true;
         }
-        if changed {
-            self.dirty = true;
-        }
+
         changed
-    }
-
-    fn clone_boxed(&self) -> Box<dyn Plant> {
-        let mut p = Self::new();
-        p.params = self.params.clone();
-        p.iteration = self.iteration;
-        p.last_season = self.last_season;
-        p.dormancy_offset = self.dormancy_offset;
-        p.dirty = true;
-        Box::new(p)
-    }
-
-    fn actions(&mut self, env: &PlantEnvironment) -> &[Action] {
-        if (env.season - self.last_season).abs() > 0.02 {
-            self.dirty = true;
-        }
-        if self.dirty {
-            self.cached_actions = generate(
-                self.iteration,
-                &self.params,
-                env.season,
-                self.dormancy_offset,
-            );
-            self.last_season = env.season;
-            self.dirty = false;
-        }
-        &self.cached_actions
     }
 }
 
@@ -341,20 +200,8 @@ impl Display for Cs {
             Self::X(t) => write!(f, "X({t})"),
             Self::L => write!(f, "L"),
             Self::K => write!(f, "K"),
-            Self::Pitch(a) => {
-                if *a >= 0.0 {
-                    write!(f, "^({a:.3})")
-                } else {
-                    write!(f, "&({:.3})", a.abs())
-                }
-            }
-            Self::Roll(a) => {
-                if *a >= 0.0 {
-                    write!(f, "/({a:.3})")
-                } else {
-                    write!(f, "\\({:.3})", a.abs())
-                }
-            }
+            Self::Pitch(a) => fmt_angle(f, '^', '&', *a),
+            Self::Roll(a) => fmt_angle(f, '/', '\\', *a),
             Self::Push => write!(f, "["),
             Self::Pop => write!(f, "]"),
         }
@@ -436,7 +283,7 @@ fn generate(age: u32, p: &CapsellaParams, season: f32, dormancy_offset: f32) -> 
     // P3: flowering apex — lateral branch with angle accumulator and four petals/pods,
     // then golden-angle roll, internode, and continuation apex.
     // Mirrors ABOP: [&(18) u(4) FF I(10) I(5) X(5) KKKK] /(137.5) I(8) A
-    let rule_a_out = vec![
+    let rule_a = Rule::Normal(A, &[
         Push,
         Pitch(-branch_angle),
         U(U_STEPS),
@@ -451,8 +298,7 @@ fn generate(age: u32, p: &CapsellaParams, season: f32, dormancy_offset: f32) -> 
         Roll(GOLDEN_ANGLE),
         I(p.i_init),
         A,
-    ];
-    let rule_a = Rule::Normal(A, &rule_a_out);
+    ]);
 
     // P4: internode elongation — length grows each step up to i_max.
     let rule_i = Rule::Parametric(I(0.0), &move |s: &Cs, out: &mut Vec<Cs>| {
@@ -513,39 +359,31 @@ fn generate(age: u32, p: &CapsellaParams, season: f32, dormancy_offset: f32) -> 
     ]);
     lsystem.evolve(age as usize);
 
-    let branch_radius = p.branch_radius;
-    let leaf_width = p.leaf_width;
-    let leaf_height = p.leaf_height;
-    let flower_size = p.flower_size;
-    let pod_size = p.pod_size;
-    let stem_colour = p.stem_colour;
-    let pod_colour = p.pod_colour;
-
     lsystem
         .current()
         .iter()
         .flat_map(|&s| match s {
             I(l) => vec![
-                Action::Colour(stem_colour),
-                Action::Branch(l, branch_radius),
+                Action::Colour(p.stem_colour),
+                Action::Branch(l, p.branch_radius),
             ],
             L => vec![
-                Action::Colour(stem_colour),
-                Action::Leaf(leaf_width, leaf_height),
+                Action::Colour(p.stem_colour),
+                Action::Leaf(p.leaf_width, p.leaf_height),
             ],
             K if show_k => vec![
                 Action::Colour(k_colour),
-                Action::Leaf(flower_size, flower_size),
-                Action::Colour(stem_colour),
+                Action::Leaf(p.flower_size, p.flower_size),
+                Action::Colour(p.stem_colour),
             ],
             X(t) => {
                 let maturity = X_DELAY.saturating_sub(t) as f32 / X_DELAY as f32;
-                let size = pod_size * maturity;
+                let size = p.pod_size * maturity;
                 if size > 0.001 {
                     vec![
-                        Action::Colour(pod_colour),
+                        Action::Colour(p.pod_colour),
                         Action::Leaf(size * 0.75, size * 1.3),
-                        Action::Colour(stem_colour),
+                        Action::Colour(p.stem_colour),
                     ]
                 } else {
                     vec![]

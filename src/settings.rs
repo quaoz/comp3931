@@ -19,6 +19,13 @@ pub enum PlantType {
     Carrot,
 }
 
+/// Traits driving ecosystem placement and ageing
+struct Traits {
+    shade_tolerance: f32,
+    growth_rate: f32,
+    years_per_iteration: f32,
+}
+
 impl PlantType {
     pub const ALL: [PlantType; 9] = [
         PlantType::Tree,
@@ -32,51 +39,36 @@ impl PlantType {
         PlantType::Carrot,
     ];
 
-    /// Intrinsic shade tolerance [0, 1]. Higher = survives better under canopy competition.
+    fn traits(self) -> Traits {
+        // shade tolerance, growth rate, years per iteration
+        let (shade_tolerance, growth_rate, years_per_iteration) = match self {
+            PlantType::Tree => (0.75, 0.04, 5.0), // 50 years to mature at max_age 10
+            PlantType::Bush => (0.50, 0.08, 2.0), // 12 years to mature at max_age 6
+            PlantType::Fern => (0.90, 0.10, 0.1), // ~2.5 years at max_iterations 25
+            PlantType::Wildflower => (0.20, 0.18, 0.08), // ~7 months — annual
+            PlantType::Capsella => (0.10, 0.25, 0.10), // ~2 years — biennial
+            PlantType::Mint => (0.45, 0.14, 0.20), // ~4 years — perennial herb
+            PlantType::Lychnis => (0.30, 0.16, 0.15), // ~2 years — biennial
+            PlantType::Mycelis => (0.65, 0.12, 0.02), // ~2 years — annual/biennial
+            PlantType::Carrot => (0.25, 0.17, 0.15), // ~2 years — biennial
+        };
+        Traits {
+            shade_tolerance,
+            growth_rate,
+            years_per_iteration,
+        }
+    }
+
     pub fn shade_tolerance(self) -> f32 {
-        match self {
-            PlantType::Tree => 0.75,
-            PlantType::Bush => 0.50,
-            PlantType::Fern => 0.90,
-            PlantType::Wildflower => 0.20,
-            PlantType::Capsella => 0.10,
-            PlantType::Mint => 0.45,
-            PlantType::Lychnis => 0.30,
-            PlantType::Mycelis => 0.65,
-            PlantType::Carrot => 0.25,
-        }
+        self.traits().shade_tolerance
     }
 
-    /// Intrinsic growth rate (radius units per succession step).
     pub fn growth_rate(self) -> f32 {
-        match self {
-            PlantType::Tree => 0.04,
-            PlantType::Bush => 0.08,
-            PlantType::Fern => 0.10,
-            PlantType::Wildflower => 0.18,
-            PlantType::Capsella => 0.25,
-            PlantType::Mint => 0.14,
-            PlantType::Lychnis => 0.16,
-            PlantType::Mycelis => 0.12,
-            PlantType::Carrot => 0.17,
-        }
+        self.traits().growth_rate
     }
 
-    /// Real-world years per L-system iteration for date-based age computation.
-    /// Slow-growing species (trees) require many years per step;
-    /// annuals complete their lifecycle in a fraction of a year.
     pub fn years_per_iteration(self) -> f32 {
-        match self {
-            PlantType::Tree => 5.0,        // 50 years to mature at max_age 10
-            PlantType::Bush => 2.0,        // 12 years to mature at max_age 6
-            PlantType::Fern => 0.1,        // ~2.5 years to mature at max_iterations 25
-            PlantType::Wildflower => 0.08, // ~7 months to mature — annual
-            PlantType::Capsella => 0.10,   // ~2 years to mature — biennial
-            PlantType::Mint => 0.20,       // ~4 years to mature — perennial herb
-            PlantType::Lychnis => 0.15,    // ~2 years to mature — biennial
-            PlantType::Mycelis => 0.02,    // ~2 years to mature — annual/biennial
-            PlantType::Carrot => 0.15,     // ~2 years to mature — biennial
-        }
+        self.traits().years_per_iteration
     }
 }
 
@@ -106,13 +98,12 @@ impl WorldDate {
     }
 
     /// Advance by `weeks`, rolling over into the next year as needed
-    pub fn advance_weeks(self, weeks: i32) -> Self {
+    pub fn advance_weeks(&mut self, weeks: i32) {
         let total = self.year as i64 * 52 + self.week as i64 + weeks as i64;
         let total = total.max(0) as u64;
-        Self {
-            year: (total / 52) as u32,
-            week: (total % 52) as u32,
-        }
+
+        self.year = (total / 52) as u32;
+        self.week = (total % 52) as u32;
     }
 }
 
@@ -192,8 +183,8 @@ impl SceneSettings {
         if !self.auto_progress {
             return 0;
         }
-        let steps = ((dt_secs * self.progress_rate).round() as u32).max(1);
 
+        let steps = ((dt_secs * self.progress_rate).round() as u32).max(1);
         let actual = if self.max_steps > 0 {
             steps.min(self.max_steps.saturating_sub(self.steps_taken))
         } else {
@@ -203,7 +194,7 @@ impl SceneSettings {
         if actual > 0 {
             let advance = (actual * self.progress_step) as i32;
             let scene = self.active_mut();
-            scene.date = scene.date.advance_weeks(advance);
+            scene.date.advance_weeks(advance);
             scene.mark_dirty();
             self.steps_taken += actual;
 
@@ -231,20 +222,13 @@ pub struct EnvironmentSettings {
     pub wind_azimuth: f32,
     pub wind_strength: f32,
     pub wind_turbulence: f32,
-    /// When true, wind deflection is baked into geometry.
     pub wind_baked: bool,
-    /// Vertex-shader sway amplitude
     pub wind_anim_strength: f32,
     pub taper: f32,
-    // Proprioceptive self-correction (Bastien et al. AC model, discrete approximation).
-    // Higher values produce stronger straightening toward the pre-tropism heading.
     pub proprioception_gamma: f32,
-    // Ornstein–Uhlenbeck correlated heading drift (stochastic variation).
     pub variation_noise_strength: f32,
     pub variation_decay_rate: f32,
-    // Per-branch colour OU drift amplitude (0 = off).
     pub colour_variation: f32,
-    // Voxel-grid space pruning: branches whose tip lands in an already-occupied cell are cut.
     pub space_pruning: bool,
     pub occupancy_cell_size: f32,
     pub generation: u64,
@@ -337,18 +321,17 @@ impl Default for DisplaySettings {
 // ── LOD Settings ──
 
 pub struct LodSettings {
-    /// Distance within which full detail is rendered (8 cylinder segments).
+    /// Distance within which full detail is rendered (8 cylinder segments)
     pub near_threshold: f32,
-    /// Distance within which medium detail is rendered (5 cylinder segments).
+    /// Distance within which medium detail is rendered (5 cylinder segments)
     pub mid_threshold: f32,
-    /// Distance beyond which minimum detail is rendered (3 cylinder segments).
-    /// Plants further than this skip mesh generation entirely.
+    /// Distance within which minimum detail is rendered (3 cylinder segments)
     pub far_threshold: f32,
-    /// Fraction of leaf quads randomly skipped at near distance. 0.0 = off.
+    /// Fraction of leaf quads randomly skipped at near distance
     pub leaf_skip_near: f32,
-    /// Fraction of leaf quads randomly skipped at mid distance.
+    /// Fraction of leaf quads randomly skipped at mid distance
     pub leaf_skip_mid: f32,
-    /// Fraction of leaf quads randomly skipped at far distance.
+    /// Fraction of leaf quads randomly skipped at far distance
     pub leaf_skip_far: f32,
 }
 
@@ -368,12 +351,11 @@ impl Default for LodSettings {
 // ── Cull Settings ──
 
 pub struct CullSettings {
-    /// Enable view-frustum culling. Plants outside the camera frustum are skipped entirely.
+    /// Enable view-frustum culling
     pub frustum_culling: bool,
-    /// Conservative bounding-sphere radius used for per-plant frustum culling (world units).
-    /// Increase if large plants are incorrectly culled at the screen edge.
+    /// Conservative bounding-sphere radius used for per-plant frustum culling
     pub cull_radius: f32,
-    /// Dead-zone width (metres) around each LOD boundary to prevent oscillation.
+    /// Dead-zone around each LOD boundary to prevent oscillation
     pub lod_hysteresis: f32,
 }
 
@@ -409,6 +391,15 @@ pub enum EcosystemKernel {
     Mixed,
 }
 
+impl EcosystemKernel {
+    pub const ALL: [EcosystemKernel; 4] = [
+        EcosystemKernel::Neutral,
+        EcosystemKernel::Inhibitory,
+        EcosystemKernel::Promotional,
+        EcosystemKernel::Mixed,
+    ];
+}
+
 impl fmt::Display for EcosystemKernel {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{:?}", self)
@@ -425,7 +416,6 @@ pub struct EcosystemSettings {
     pub thinning_radius: f32,
     pub use_succession: bool,
     pub succession_steps: u32,
-    /// Species present in this community and their relative abundance weights.
     pub species: Vec<(PlantType, f32)>,
     pub generation: u64,
 }
@@ -467,7 +457,7 @@ pub struct Settings {
 
 // ── Season Utilities ──
 
-/// Season name for display (season: 0=spring, 0.25=summer, 0.5=autumn, 0.75=winter).
+/// Season name for display
 pub fn season_name(season: f32) -> &'static str {
     let s = season.rem_euclid(1.0);
     match (s * 4.0) as u32 {
@@ -478,8 +468,6 @@ pub fn season_name(season: f32) -> &'static str {
     }
 }
 
-/// Season tint colour multiplied against plant colours in the shader.
-/// Returns Vec3::ONE (no tint) in spring/summer, warm orange in autumn, cool grey in winter.
 pub fn season_tint(season: f32) -> Vec3 {
     let s = season.rem_euclid(1.0);
     // Use cosine blend: summer peak at 0.25, winter trough at 0.75

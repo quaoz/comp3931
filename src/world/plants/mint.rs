@@ -1,5 +1,4 @@
 //! Mint plant inspired by "The Algorithmic Beauty of Plants" fig 3.11, pg 81.
-//! Decussate phyllotaxis with lateral sub-stems.
 
 use std::fmt::Display;
 
@@ -8,11 +7,12 @@ use glam::{Vec3, vec3};
 use crate::{
     settings::PlantType,
     util::{
-        lsystem::{LSystem, Rule, Symbol, SymbolType},
+        lsystem::{LSystem, Rule, Symbol, SymbolType, fmt_angle},
         rng,
         turtle::Action,
+        widget,
     },
-    world::plants::{Plant, PlantEnvironment},
+    world::plants::Species,
 };
 
 #[derive(Clone)]
@@ -50,203 +50,89 @@ impl Default for MintParams {
     }
 }
 
-pub struct MintPlant {
-    iteration: u32,
-    dirty: bool,
-    cached_actions: Vec<Action>,
-    pub params: MintParams,
-    last_season: f32,
-    dormancy_offset: f32,
-}
+pub struct Mint;
 
-impl Default for MintPlant {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+impl Species for Mint {
+    type Params = MintParams;
 
-impl MintPlant {
-    pub fn new() -> Self {
-        let params = MintParams::default();
-        let dormancy_offset = rng::random_range(-0.05, 0.05);
-        let actions = generate(0, &params, 0.25, dormancy_offset);
-        Self {
-            iteration: 0,
-            dirty: false,
-            cached_actions: actions,
-            params,
-            last_season: 0.25,
-            dormancy_offset,
-        }
-    }
-}
+    const TYPE: PlantType = PlantType::Mint;
 
-impl Plant for MintPlant {
-    fn plant_type(&self) -> PlantType {
-        PlantType::Mint
+    fn generate(age: u32, p: &MintParams, season: f32, dormancy_offset: f32) -> Vec<Action> {
+        generate(age, p, season, dormancy_offset)
     }
 
-    fn iteration(&self) -> u32 {
-        self.iteration
+    fn max_iterations(p: &MintParams) -> u32 {
+        p.max_iterations
     }
 
-    fn max_iterations(&self) -> u32 {
-        self.params.max_iterations
+    fn colour(p: &MintParams, _iteration: u32) -> Vec3 {
+        p.stem_colour
     }
 
-    fn set_iteration(&mut self, iteration: u32) {
-        if self.iteration != iteration {
-            self.iteration = iteration;
-            self.dirty = true;
-        }
-    }
-
-    fn colour(&self) -> Vec3 {
-        self.params.stem_colour
-    }
-
-    fn ui(&mut self, ui: &mut egui::Ui) -> bool {
+    fn ui(p: &mut MintParams, ui: &mut egui::Ui) -> bool {
         let mut changed = false;
-        let p = &mut self.params;
 
         egui::Grid::new("mint_params")
             .num_columns(2)
             .spacing([8.0, 4.0])
             .show(ui, |ui| {
-                ui.label("Max iterations");
-                let mut a = p.max_iterations as i32;
-                if ui.add(egui::DragValue::new(&mut a).range(1..=30)).changed() {
-                    p.max_iterations = a as u32;
-                    changed = true;
-                }
-                ui.end_row();
-
-                ui.label("Max nodes");
-                let mut n = p.max_nodes as i32;
-                if ui.add(egui::Slider::new(&mut n, 1..=12)).changed() {
-                    p.max_nodes = n as u32;
-                    changed = true;
-                }
-                ui.end_row();
-
-                ui.label("Leaf angle");
-                if ui
-                    .add(egui::Slider::new(&mut p.leaf_angle_deg, 10.0..=85.0).suffix("°"))
-                    .changed()
-                {
-                    changed = true;
-                }
-                ui.end_row();
-
-                ui.label("Branch angle");
-                if ui
-                    .add(egui::Slider::new(&mut p.branch_angle_deg, 5.0..=70.0).suffix("°"))
-                    .changed()
-                {
-                    changed = true;
-                }
-                ui.end_row();
-
-                ui.label("Internode length");
-                if ui
-                    .add(egui::Slider::new(&mut p.i_init, 0.01..=0.2).max_decimals(3))
-                    .changed()
-                {
-                    changed = true;
-                }
-                ui.end_row();
-
-                ui.label("Internode max");
-                if ui
-                    .add(egui::Slider::new(&mut p.i_max, 0.05..=0.4).max_decimals(3))
-                    .changed()
-                {
-                    changed = true;
-                }
-                ui.end_row();
-
-                ui.label("Internode growth");
-                if ui
-                    .add(egui::Slider::new(&mut p.i_growth, 1.0..=1.5).max_decimals(2))
-                    .changed()
-                {
-                    changed = true;
-                }
-                ui.end_row();
-
-                ui.label("Branch radius");
-                if ui
-                    .add(egui::Slider::new(&mut p.branch_radius, 0.002..=0.06).max_decimals(4))
-                    .changed()
-                {
-                    changed = true;
-                }
-                ui.end_row();
-
-                ui.label("Leaf width");
-                changed |= ui
-                    .add(egui::Slider::new(&mut p.leaf_width, 0.01..=0.25).max_decimals(3))
-                    .changed();
-                ui.end_row();
-
-                ui.label("Leaf height");
-                changed |= ui
-                    .add(egui::Slider::new(&mut p.leaf_height, 0.01..=0.35).max_decimals(3))
-                    .changed();
-                ui.end_row();
-
-                ui.label("Stem colour");
-                let mut rgb = p.stem_colour.to_array();
-                if ui.color_edit_button_rgb(&mut rgb).changed() {
-                    p.stem_colour = Vec3::from(rgb);
-                    changed = true;
-                }
-                ui.end_row();
-
-                ui.label("Leaf colour");
-                let mut rgb = p.leaf_colour.to_array();
-                if ui.color_edit_button_rgb(&mut rgb).changed() {
-                    p.leaf_colour = Vec3::from(rgb);
-                    changed = true;
-                }
-                ui.end_row();
+                changed |= widget::row(
+                    ui,
+                    "Max iterations",
+                    egui::DragValue::new(&mut p.max_iterations).range(1..=30),
+                );
+                changed |=
+                    widget::row(ui, "Max nodes", egui::Slider::new(&mut p.max_nodes, 1..=12));
+                changed |= widget::row(
+                    ui,
+                    "Leaf angle",
+                    egui::Slider::new(&mut p.leaf_angle_deg, 10.0..=85.0).suffix("\u{b0}"),
+                );
+                changed |= widget::row(
+                    ui,
+                    "Branch angle",
+                    egui::Slider::new(&mut p.branch_angle_deg, 5.0..=70.0).suffix("\u{b0}"),
+                );
+                changed |= widget::row(
+                    ui,
+                    "Internode length",
+                    egui::Slider::new(&mut p.i_init, 0.01..=0.2).max_decimals(3),
+                );
+                changed |= widget::row(
+                    ui,
+                    "Internode max",
+                    egui::Slider::new(&mut p.i_max, 0.05..=0.4).max_decimals(3),
+                );
+                changed |= widget::row(
+                    ui,
+                    "Internode growth",
+                    egui::Slider::new(&mut p.i_growth, 1.0..=1.5).max_decimals(2),
+                );
+                changed |= widget::row(
+                    ui,
+                    "Branch radius",
+                    egui::Slider::new(&mut p.branch_radius, 0.002..=0.06).max_decimals(4),
+                );
+                changed |= widget::row(
+                    ui,
+                    "Leaf width",
+                    egui::Slider::new(&mut p.leaf_width, 0.01..=0.25).max_decimals(3),
+                );
+                changed |= widget::row(
+                    ui,
+                    "Leaf height",
+                    egui::Slider::new(&mut p.leaf_height, 0.01..=0.35).max_decimals(3),
+                );
+                changed |= widget::colour_row(ui, "Stem colour", &mut p.stem_colour);
+                changed |= widget::colour_row(ui, "Leaf colour", &mut p.leaf_colour);
             });
 
         if ui.button("Reset").clicked() {
-            self.params = MintParams::default();
+            *p = MintParams::default();
             changed = true;
         }
-        if changed {
-            self.dirty = true;
-        }
+
         changed
-    }
-
-    fn clone_boxed(&self) -> Box<dyn Plant> {
-        let mut p = Self::new();
-        p.params = self.params.clone();
-        p.iteration = self.iteration;
-        p.last_season = self.last_season;
-        p.dormancy_offset = self.dormancy_offset;
-        p.dirty = true;
-        Box::new(p)
-    }
-
-    fn actions(&mut self, env: &PlantEnvironment) -> &[Action] {
-        if (env.season - self.last_season).abs() > 0.02 {
-            self.dirty = true;
-        }
-        if self.dirty {
-            self.cached_actions = generate(
-                self.iteration,
-                &self.params,
-                env.season,
-                self.dormancy_offset,
-            );
-            self.last_season = env.season;
-            self.dirty = false;
-        }
-        &self.cached_actions
     }
 }
 
@@ -285,20 +171,8 @@ impl Display for Ms {
             Self::B => write!(f, "B"),
             Self::I(l) => write!(f, "I({l})"),
             Self::L => write!(f, "L"),
-            Self::Turn(angle) => {
-                if *angle >= 0.0 {
-                    write!(f, "+({angle})")
-                } else {
-                    write!(f, "-({angle})")
-                }
-            }
-            Self::Roll(angle) => {
-                if *angle >= 0.0 {
-                    write!(f, "/({angle})")
-                } else {
-                    write!(f, "\\({angle})")
-                }
-            }
+            Self::Turn(angle) => fmt_angle(f, '+', '-', *angle),
+            Self::Roll(angle) => fmt_angle(f, '/', '\\', *angle),
             Self::Colour(c) => write!(f, "C({})", c),
             Self::Push => write!(f, "["),
             Self::Pop => write!(f, "]"),
@@ -315,16 +189,8 @@ fn generate(age: u32, p: &MintParams, season: f32, dormancy_offset: f32) -> Vec<
     use Ms::*;
 
     // Autumn colouration: mint leaves turn bronze as they die back.
-    let autumn_leaf = glam::vec3(0.62, 0.32, 0.12);
-    let leaf_colour = if season < 0.45 {
-        p.leaf_colour
-    } else if season < 0.82 {
-        let t = (season - 0.45) / 0.37;
-        let t = t * t * (3.0 - 2.0 * t);
-        p.leaf_colour.lerp(autumn_leaf, t)
-    } else {
-        autumn_leaf
-    };
+    let leaf_colour =
+        super::autumn_colour(season, p.leaf_colour, vec3(0.62, 0.32, 0.12), 0.45, 0.82);
 
     let branch_angle = p.branch_angle_deg.to_radians();
     let leaf_angle = p.leaf_angle_deg.to_radians();

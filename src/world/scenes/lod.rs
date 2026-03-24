@@ -7,18 +7,17 @@ use crate::{
 
 // ── LOD tier enum ──
 
-/// Level-of-detail tier for a plant.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum LodTier {
-    /// Full detail: 8 cylinder segments, all branches, all leaves.
+    /// Full detail: 8 cylinder segments, all branches, all leaves
     Near = 0,
-    /// Medium detail: 5 cylinder segments, reduced leaf density.
+    /// Medium detail: 5 cylinder segments, reduced leaf density
     Mid = 1,
-    /// Low detail: 3 cylinder segments, thin branches culled, reduced leaf density.
+    /// Low detail: 3 cylinder segments, thin branches culled, reduced leaf density
     Far = 2,
-    /// Beyond far threshold: no mesh, line skeleton only, no leaves.
+    /// Beyond far threshold: no mesh, line skeleton only, no leaves
     Beyond = 3,
-    /// Outside view frustum: nothing rendered.
+    /// Outside view frustum: nothing rendered
     Culled = 4,
 }
 
@@ -59,8 +58,6 @@ pub fn lod_tier(dist: f32, lod: &LodSettings) -> LodTier {
 
 /// Like `lod_tier` but applies a hysteresis dead zone at each boundary so that a
 /// plant oscillating near a threshold does not repeatedly trigger rebuilds.
-/// Returns `prev_tier` unchanged when the new distance is within `hysteresis` of
-/// the transition boundary.
 pub fn lod_tier_smooth(
     dist: f32,
     prev_tier: LodTier,
@@ -71,12 +68,14 @@ pub fn lod_tier_smooth(
     if raw == prev_tier || prev_tier == LodTier::Culled {
         return raw;
     }
+
     let boundary = match raw.min(prev_tier) {
         LodTier::Near => lod.near_threshold,
         LodTier::Mid => lod.mid_threshold,
         LodTier::Far => lod.far_threshold,
         _ => return raw,
     };
+
     if raw > prev_tier {
         if dist > boundary + hysteresis {
             raw
@@ -94,9 +93,7 @@ pub fn lod_tier_smooth(
 
 // ── Frustum culling ──
 
-/// Six half-space planes extracted from a view-projection matrix (Gribb–Hartmann method).
-/// Each plane is normalised so that `dot(plane.xyz, point) + plane.w` is the signed
-/// distance from `point` to the plane.
+/// Six half-space planes extracted from a view-projection matrix
 pub struct Frustum {
     planes: [Vec4; 6],
 }
@@ -119,15 +116,15 @@ impl Frustum {
         Self { planes }
     }
 
-    /// Returns `false` only when the sphere is fully outside at least one frustum plane.
-    /// Conservative — false negatives are impossible; false positives are safe.
+    /// Returns `false` only when the sphere is fully outside at least one frustum plane
     pub fn contains_sphere(&self, centre: Vec3, radius: f32) -> bool {
-        let c = centre.extend(1.0);
-        self.planes.iter().all(|&plane| plane.dot(c) >= -radius)
+        self.planes
+            .iter()
+            .all(|&plane| plane.dot(centre.extend(1.0)) >= -radius)
     }
 }
 
-/// Returns the LOD tier for a plant, applying frustum culling and hysteresis.
+/// Returns the LOD tier for a plant, applying frustum culling and hysteresis
 pub fn plant_lod_tier(
     pos: Vec3,
     camera_pos: Vec3,
@@ -140,6 +137,7 @@ pub fn plant_lod_tier(
     if cull.frustum_culling && !frustum.contains_sphere(pos, cull.cull_radius) {
         return LodTier::Culled;
     }
+
     let dist = (pos - camera_pos).length();
     if full_rebuild {
         lod_tier(dist, lod)
@@ -151,11 +149,9 @@ pub fn plant_lod_tier(
 // ── Per-plant geometry cache ──
 
 pub struct PlantCache {
-    /// Tier used for geometry.
+    /// Tier used for geometry
     pub tier: LodTier,
-    /// Tier requested by distance/frustum before any adjustment.
-    /// Change detection compares against this so that escalation alone does not
-    /// trigger a continuous rebuild cycle.
+    /// Tier requested by distance/frustum before any adjustment
     pub requested_tier: LodTier,
     pub line_geo: LineGeometry,
     pub mesh_geo: MeshGeometry,

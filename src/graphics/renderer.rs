@@ -16,41 +16,31 @@ use crate::{
 
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 const MAX_VERTICES: u64 = 20_000_000;
-const VERTEX_SIZE: u64 = 4 * 3;
-const COLOUR_SIZE: u64 = 4 * 3;
-const NORMAL_SIZE: u64 = 4 * 3;
-const UV_SIZE: u64 = 4 * 2;
-const TANGENT_SIZE: u64 = 4 * 3;
+const VEC3_SIZE: u64 = 4 * 3;
+const VEC2_SIZE: u64 = 4 * 2;
 
-const VERTEX_LAYOUT: VertexBufferLayout<'static> = VertexBufferLayout {
-    array_stride: VERTEX_SIZE,
-    step_mode: wgpu::VertexStepMode::Vertex,
-    attributes: &wgpu::vertex_attr_array![0 => Float32x3],
-};
+/// Vertex layout for one tightly-packed per-vertex attribute at `shader_location`.
+const fn attribute_layout(
+    stride: u64,
+    attributes: &'static [wgpu::VertexAttribute],
+) -> VertexBufferLayout<'static> {
+    VertexBufferLayout {
+        array_stride: stride,
+        step_mode: wgpu::VertexStepMode::Vertex,
+        attributes,
+    }
+}
 
-const COLOUR_LAYOUT: VertexBufferLayout<'static> = VertexBufferLayout {
-    array_stride: COLOUR_SIZE,
-    step_mode: wgpu::VertexStepMode::Vertex,
-    attributes: &wgpu::vertex_attr_array![1 => Float32x3],
-};
-
-const NORMAL_LAYOUT: VertexBufferLayout<'static> = VertexBufferLayout {
-    array_stride: NORMAL_SIZE,
-    step_mode: wgpu::VertexStepMode::Vertex,
-    attributes: &wgpu::vertex_attr_array![2 => Float32x3],
-};
-
-const UV_LAYOUT: VertexBufferLayout<'static> = VertexBufferLayout {
-    array_stride: UV_SIZE,
-    step_mode: wgpu::VertexStepMode::Vertex,
-    attributes: &wgpu::vertex_attr_array![3 => Float32x2],
-};
-
-const TANGENT_LAYOUT: VertexBufferLayout<'static> = VertexBufferLayout {
-    array_stride: TANGENT_SIZE,
-    step_mode: wgpu::VertexStepMode::Vertex,
-    attributes: &wgpu::vertex_attr_array![4 => Float32x3],
-};
+const VERTEX_LAYOUT: VertexBufferLayout<'static> =
+    attribute_layout(VEC3_SIZE, &wgpu::vertex_attr_array![0 => Float32x3]);
+const COLOUR_LAYOUT: VertexBufferLayout<'static> =
+    attribute_layout(VEC3_SIZE, &wgpu::vertex_attr_array![1 => Float32x3]);
+const NORMAL_LAYOUT: VertexBufferLayout<'static> =
+    attribute_layout(VEC3_SIZE, &wgpu::vertex_attr_array![2 => Float32x3]);
+const UV_LAYOUT: VertexBufferLayout<'static> =
+    attribute_layout(VEC2_SIZE, &wgpu::vertex_attr_array![3 => Float32x2]);
+const TANGENT_LAYOUT: VertexBufferLayout<'static> =
+    attribute_layout(VEC3_SIZE, &wgpu::vertex_attr_array![4 => Float32x3]);
 
 fn load_texture(
     device: &wgpu::Device,
@@ -95,6 +85,31 @@ fn load_texture(
     );
 
     Ok(texture.create_view(&Default::default()))
+}
+
+/// Allocates a `MAX_VERTICES`-capacity buffer of `element_size`-byte elements.
+fn geometry_buffer(
+    device: &wgpu::Device,
+    label: &str,
+    element_size: u64,
+    usage: BufferUsages,
+) -> Buffer {
+    device.create_buffer(&BufferDescriptor {
+        label: Some(label),
+        size: element_size * MAX_VERTICES,
+        usage: usage | BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    })
+}
+
+/// As [`geometry_buffer`], for a `u32` index buffer.
+fn alloc_index_buffer(device: &wgpu::Device, label: &str) -> Buffer {
+    geometry_buffer(device, label, 4, BufferUsages::INDEX)
+}
+
+/// As [`geometry_buffer`], for a vertex attribute buffer.
+fn alloc_vertex_buffer(device: &wgpu::Device, label: &str, element_size: u64) -> Buffer {
+    geometry_buffer(device, label, element_size, BufferUsages::VERTEX)
 }
 
 fn depth_stencil_state() -> wgpu::DepthStencilState {
@@ -300,26 +315,10 @@ impl Renderer {
         let depth_view = create_depth_texture(&display.device, width, height);
 
         // Line pipeline
-        let vertex_buffer = display.device.create_buffer(&BufferDescriptor {
-            label: Some("Line Vertex Buffer"),
-            size: VERTEX_SIZE * MAX_VERTICES,
-            usage: BufferUsages::VERTEX | BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-
-        let colour_buffer = display.device.create_buffer(&BufferDescriptor {
-            label: Some("Line Colour Buffer"),
-            size: COLOUR_SIZE * MAX_VERTICES,
-            usage: BufferUsages::VERTEX | BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-
-        let index_buffer = display.device.create_buffer(&BufferDescriptor {
-            label: Some("Line Index Buffer"),
-            size: 4 * MAX_VERTICES,
-            usage: BufferUsages::INDEX | BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
+        let device = &display.device;
+        let vertex_buffer = alloc_vertex_buffer(device, "Line Vertex Buffer", VEC3_SIZE);
+        let colour_buffer = alloc_vertex_buffer(device, "Line Colour Buffer", VEC3_SIZE);
+        let index_buffer = alloc_index_buffer(device, "Line Index Buffer");
 
         let pipeline_layout =
             display
@@ -373,47 +372,12 @@ impl Renderer {
             });
 
         // Mesh pipeline
-        let mesh_vertex_buffer = display.device.create_buffer(&BufferDescriptor {
-            label: Some("Mesh Vertex Buffer"),
-            size: VERTEX_SIZE * MAX_VERTICES,
-            usage: BufferUsages::VERTEX | BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-
-        let mesh_colour_buffer = display.device.create_buffer(&BufferDescriptor {
-            label: Some("Mesh Colour Buffer"),
-            size: COLOUR_SIZE * MAX_VERTICES,
-            usage: BufferUsages::VERTEX | BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-
-        let mesh_normal_buffer = display.device.create_buffer(&BufferDescriptor {
-            label: Some("Mesh Normal Buffer"),
-            size: NORMAL_SIZE * MAX_VERTICES,
-            usage: BufferUsages::VERTEX | BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-
-        let mesh_uv_buffer = display.device.create_buffer(&BufferDescriptor {
-            label: Some("Mesh UV Buffer"),
-            size: UV_SIZE * MAX_VERTICES,
-            usage: BufferUsages::VERTEX | BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-
-        let mesh_tangent_buffer = display.device.create_buffer(&BufferDescriptor {
-            label: Some("Mesh Tangent Buffer"),
-            size: TANGENT_SIZE * MAX_VERTICES,
-            usage: BufferUsages::VERTEX | BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-
-        let mesh_index_buffer = display.device.create_buffer(&BufferDescriptor {
-            label: Some("Mesh Index Buffer"),
-            size: 4 * MAX_VERTICES,
-            usage: BufferUsages::INDEX | BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
+        let mesh_vertex_buffer = alloc_vertex_buffer(device, "Mesh Vertex Buffer", VEC3_SIZE);
+        let mesh_colour_buffer = alloc_vertex_buffer(device, "Mesh Colour Buffer", VEC3_SIZE);
+        let mesh_normal_buffer = alloc_vertex_buffer(device, "Mesh Normal Buffer", VEC3_SIZE);
+        let mesh_uv_buffer = alloc_vertex_buffer(device, "Mesh UV Buffer", VEC2_SIZE);
+        let mesh_tangent_buffer = alloc_vertex_buffer(device, "Mesh Tangent Buffer", VEC3_SIZE);
+        let mesh_index_buffer = alloc_index_buffer(device, "Mesh Index Buffer");
 
         let draw_mesh = display
             .device

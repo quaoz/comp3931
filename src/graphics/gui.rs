@@ -10,6 +10,7 @@ use winit::{event::WindowEvent, window::Window};
 use crate::{
     perf::PerfLogger,
     settings::{EcosystemKernel, EnvironmentSettings, PlantType, SceneData, Settings},
+    util::widget,
     world::{CameraInfo, plants::PlantInstance, scenes::SceneStats},
 };
 
@@ -510,74 +511,56 @@ fn ecosystem_ui(ui: &mut egui::Ui, scene: &mut SceneData) {
     CollapsingHeader::new("Ecosystem")
         .default_open(true)
         .show(ui, |ui| {
+            let mut dirty = false;
+
             ui.strong("Placement");
             Grid::new("ecosystem_placement_grid")
                 .num_columns(2)
                 .striped(true)
                 .show(ui, |ui| {
-                    ui.label("Area").on_hover_text(
+                    dirty |= widget::row_hover(
+                        ui,
+                        "Area",
                         "Side length of the square region plants are scattered across",
+                        Slider::new(&mut eco.area, 20.0..=300.0),
                     );
-                    if ui.add(Slider::new(&mut eco.area, 20.0..=300.0)).changed() {
-                        eco.mark_dirty();
-                    }
-                    ui.end_row();
+                    dirty |= widget::row_hover(
+                        ui,
+                        "Plants",
+                        "Total number of plants to place in the scene.",
+                        Slider::new(&mut eco.num_plants, 1..=3000),
+                    );
 
-                    ui.label("Plants")
-                        .on_hover_text("Total number of plants to place in the scene.");
-                    if ui.add(Slider::new(&mut eco.num_plants, 1..=3000)).changed() {
-                        eco.mark_dirty();
-                    }
-                    ui.end_row();
-
-                    ui.label("Kernel").on_hover_text(
+                    let prev_kernel = eco.kernel;
+                    widget::custom_row_hover(
+                        ui,
+                        "Kernel",
                         "Spatial interaction kernel applied during placement:\n• Neutral — purely \
                          random \n• Inhibitory — plants repel each other \n• Promotional — plants \
                          attract each other \n•  Mixed — short-range inhibition, long-range \
                          attraction",
+                        |ui| {
+                            ComboBox::from_id_salt("eco_kernel_combo")
+                                .selected_text(eco.kernel.to_string())
+                                .show_ui(ui, |ui| {
+                                    for k in EcosystemKernel::ALL {
+                                        ui.selectable_value(&mut eco.kernel, k, k.to_string());
+                                    }
+                                });
+                        },
                     );
-                    let prev_kernel = eco.kernel;
-                    ComboBox::from_id_salt("eco_kernel_combo")
-                        .selected_text(eco.kernel.to_string())
-                        .show_ui(ui, |ui| {
-                            ui.selectable_value(
-                                &mut eco.kernel,
-                                EcosystemKernel::Neutral,
-                                "Neutral",
-                            );
-                            ui.selectable_value(
-                                &mut eco.kernel,
-                                EcosystemKernel::Inhibitory,
-                                "Inhibitory",
-                            );
-                            ui.selectable_value(
-                                &mut eco.kernel,
-                                EcosystemKernel::Promotional,
-                                "Promotional",
-                            );
-                            ui.selectable_value(&mut eco.kernel, EcosystemKernel::Mixed, "Mixed");
-                        });
-                    if eco.kernel != prev_kernel {
-                        eco.mark_dirty();
-                    }
-                    ui.end_row();
+                    dirty |= eco.kernel != prev_kernel;
 
-                    ui.label("Kernel radius").on_hover_text(
+                    dirty |= widget::row_hover(
+                        ui,
+                        "Kernel radius",
                         "Distance over which the spatial kernel acts. Larger values produce \
                          broader clustering or exclusion zones.",
+                        Slider::new(&mut eco.kernel_radius, 1.0..=50.0).logarithmic(true),
                     );
-                    if ui
-                        .add(Slider::new(&mut eco.kernel_radius, 1.0..=50.0).logarithmic(true))
-                        .changed()
-                    {
-                        eco.mark_dirty();
-                    }
-                    ui.end_row();
                 });
 
-            // Species list
             ui.strong("Species");
-            let mut species_dirty = false;
             let mut remove_idx: Option<usize> = None;
             for (i, (plant_type, weight)) in eco.species.iter_mut().enumerate() {
                 let prev_type = *plant_type;
@@ -590,7 +573,7 @@ fn ecosystem_ui(ui: &mut egui::Ui, scene: &mut SceneData) {
                                 ui.selectable_value(plant_type, t, t.to_string());
                             }
                         });
-                    species_dirty |= ui
+                    dirty |= ui
                         .add(
                             Slider::new(weight, 0.1..=5.0)
                                 .text("weight")
@@ -607,14 +590,13 @@ fn ecosystem_ui(ui: &mut egui::Ui, scene: &mut SceneData) {
                         remove_idx = Some(i);
                     }
                 });
-                if *plant_type != prev_type {
-                    species_dirty = true;
-                }
+                dirty |= *plant_type != prev_type;
             }
             if let Some(i) = remove_idx {
                 eco.species.remove(i);
-                species_dirty = true;
+                dirty = true;
             }
+
             let mut add_species: Option<PlantType> = None;
             ComboBox::from_id_salt("eco_add_species_combo")
                 .selected_text("Add species")
@@ -625,10 +607,7 @@ fn ecosystem_ui(ui: &mut egui::Ui, scene: &mut SceneData) {
                 });
             if let Some(t) = add_species {
                 eco.species.push((t, 1.0));
-                species_dirty = true;
-            }
-            if species_dirty {
-                eco.mark_dirty();
+                dirty = true;
             }
 
             ui.strong("Self-Thinning");
@@ -636,26 +615,20 @@ fn ecosystem_ui(ui: &mut egui::Ui, scene: &mut SceneData) {
                 .num_columns(2)
                 .striped(true)
                 .show(ui, |ui| {
-                    ui.label("Enabled").on_hover_text(
+                    dirty |= widget::check_row(
+                        ui,
+                        "Enabled",
                         "Remove plants that are too close together, simulating competition for \
                          resources. Smaller plants are removed first.",
+                        &mut eco.use_self_thinning,
                     );
-                    if ui.checkbox(&mut eco.use_self_thinning, "").changed() {
-                        eco.mark_dirty();
-                    }
-                    ui.end_row();
-
-                    ui.label("Thinning radius").on_hover_text(
+                    dirty |= widget::row_hover(
+                        ui,
+                        "Thinning radius",
                         "Minimum allowed distance between plants. Plants closer than this may be \
                          culled.",
+                        Slider::new(&mut eco.thinning_radius, 1.0..=30.0),
                     );
-                    if ui
-                        .add(Slider::new(&mut eco.thinning_radius, 1.0..=30.0))
-                        .changed()
-                    {
-                        eco.mark_dirty();
-                    }
-                    ui.end_row();
                 });
 
             ui.strong("Succession");
@@ -663,27 +636,25 @@ fn ecosystem_ui(ui: &mut egui::Ui, scene: &mut SceneData) {
                 .num_columns(2)
                 .striped(true)
                 .show(ui, |ui| {
-                    ui.label("Enabled").on_hover_text(
+                    dirty |= widget::check_row(
+                        ui,
+                        "Enabled",
                         "Iteratively replace shade-intolerant species with more tolerant ones in \
                          densely shaded areas, simulating long-term vegetation change.",
+                        &mut eco.use_succession,
                     );
-                    if ui.checkbox(&mut eco.use_succession, "").changed() {
-                        eco.mark_dirty();
-                    }
-                    ui.end_row();
-
-                    ui.label("Steps").on_hover_text(
+                    dirty |= widget::row_hover(
+                        ui,
+                        "Steps",
                         "Number of succession iterations to simulate. More steps produce a more \
                          mature, climax community.",
+                        Slider::new(&mut eco.succession_steps, 1..=30),
                     );
-                    if ui
-                        .add(Slider::new(&mut eco.succession_steps, 1..=30))
-                        .changed()
-                    {
-                        eco.mark_dirty();
-                    }
-                    ui.end_row();
                 });
+
+            if dirty {
+                eco.mark_dirty();
+            }
         });
 }
 
@@ -691,233 +662,150 @@ fn environment_ui(ui: &mut egui::Ui, env: &mut EnvironmentSettings) {
     CollapsingHeader::new("Environment")
         .default_open(true)
         .show(ui, |ui| {
-            // Growth & Tropism
+            let mut dirty = false;
+
             ui.strong("Growth & Tropism");
             Grid::new("env_growth_grid")
                 .num_columns(2)
                 .striped(true)
                 .show(ui, |ui| {
-                    ui.label("Phototropism").on_hover_text(
+                    dirty |= widget::row_hover(
+                        ui,
+                        "Phototropism",
                         "Bends branches toward the light source. Higher values produce more \
                          pronounced lean toward the sun.",
+                        Slider::new(&mut env.tropism_strength, 0.0..=1.0),
                     );
-                    if ui
-                        .add(Slider::new(&mut env.tropism_strength, 0.0..=1.0))
-                        .changed()
-                    {
-                        env.mark_dirty();
-                    }
-                    ui.end_row();
-
-                    ui.label("Gravitropism").on_hover_text(
+                    dirty |= widget::row_hover(
+                        ui,
+                        "Gravitropism",
                         "Pulls branches downward (negative gravitropism bends them upward). \
                          Models gravity's effect on branch angle.",
+                        Slider::new(&mut env.gravitropism_strength, 0.0..=1.0),
                     );
-                    if ui
-                        .add(Slider::new(&mut env.gravitropism_strength, 0.0..=1.0))
-                        .changed()
-                    {
-                        env.mark_dirty();
-                    }
-                    ui.end_row();
-
-                    ui.label("Branch taper").on_hover_text(
+                    dirty |= widget::row_hover(
+                        ui,
+                        "Branch taper",
                         "How much branch radius shrinks at each internode. 1.0 = no taper; lower \
                          values produce more conical branches.",
+                        Slider::new(&mut env.taper, 0.3..=1.0),
                     );
-                    if ui.add(Slider::new(&mut env.taper, 0.3..=1.0)).changed() {
-                        env.mark_dirty();
-                    }
-                    ui.end_row();
-
-                    ui.label("Self-straightening").on_hover_text(
+                    dirty |= widget::row_hover(
+                        ui,
+                        "Self-straightening",
                         "How quickly shoots correct back toward vertical after bending. Higher = \
                          stiffer stems that resist deflection.",
+                        Slider::new(&mut env.proprioception_gamma, 0.0..=0.5).fixed_decimals(3),
                     );
-                    if ui
-                        .add(
-                            Slider::new(&mut env.proprioception_gamma, 0.0..=0.5).fixed_decimals(3),
-                        )
-                        .changed()
-                    {
-                        env.mark_dirty();
-                    }
-                    ui.end_row();
-
-                    ui.label("Branch drift").on_hover_text(
+                    dirty |= widget::row_hover(
+                        ui,
+                        "Branch drift",
                         "Amplitude of random shape variation along each branch. Higher = more \
                          organic, irregular silhouettes.",
+                        Slider::new(&mut env.variation_noise_strength, 0.0..=0.2).fixed_decimals(3),
                     );
-                    if ui
-                        .add(
-                            Slider::new(&mut env.variation_noise_strength, 0.0..=0.2)
-                                .fixed_decimals(3),
-                        )
-                        .changed()
-                    {
-                        env.mark_dirty();
-                    }
-                    ui.end_row();
-
-                    ui.label("Drift memory").on_hover_text(
+                    dirty |= widget::row_hover(
+                        ui,
+                        "Drift memory",
                         "How far drift persists along a branch before reverting to straight. Low \
                          = long sweeping curves; high = rapid short wiggles.",
+                        Slider::new(&mut env.variation_decay_rate, 0.0..=1.0).fixed_decimals(2),
                     );
-                    if ui
-                        .add(
-                            Slider::new(&mut env.variation_decay_rate, 0.0..=1.0).fixed_decimals(2),
-                        )
-                        .changed()
-                    {
-                        env.mark_dirty();
-                    }
-                    ui.end_row();
-
-                    ui.label("Colour variation").on_hover_text(
+                    dirty |= widget::row_hover(
+                        ui,
+                        "Colour variation",
                         "Per-branch colour drift amplitude. Adds subtle hue variation across the \
                          canopy for a more natural look.",
+                        Slider::new(&mut env.colour_variation, 0.0..=0.15).fixed_decimals(3),
                     );
-                    if ui
-                        .add(Slider::new(&mut env.colour_variation, 0.0..=0.15).fixed_decimals(3))
-                        .changed()
-                    {
-                        env.mark_dirty();
-                    }
-                    ui.end_row();
                 });
 
-            // Wind
             ui.strong("Wind");
             Grid::new("env_wind_grid")
                 .num_columns(2)
                 .striped(true)
                 .show(ui, |ui| {
-                    ui.label("Direction").on_hover_text(
+                    dirty |= widget::row_hover(
+                        ui,
+                        "Direction",
                         "Compass bearing the wind blows from (0° = north, 90° = east).",
+                        Slider::new(&mut env.wind_azimuth, 0.0..=360.0).suffix("°"),
                     );
-                    if ui
-                        .add(Slider::new(&mut env.wind_azimuth, 0.0..=360.0).suffix("°"))
-                        .changed()
-                    {
-                        env.mark_dirty();
-                    }
-                    ui.end_row();
-
-                    ui.label("Strength").on_hover_text(
+                    dirty |= widget::row_hover(
+                        ui,
+                        "Strength",
                         "Overall wind force. Deflects branches in the wind direction at geometry \
                          build time.",
+                        Slider::new(&mut env.wind_strength, 0.0..=1.0),
                     );
-                    if ui
-                        .add(Slider::new(&mut env.wind_strength, 0.0..=1.0))
-                        .changed()
-                    {
-                        env.mark_dirty();
-                    }
-                    ui.end_row();
-
-                    ui.label("Turbulence").on_hover_text(
+                    dirty |= widget::row_hover(
+                        ui,
+                        "Turbulence",
                         "Random variation layered on top of the mean wind direction. Higher = \
                          gustier, less uniform deflection.",
+                        Slider::new(&mut env.wind_turbulence, 0.0..=0.3),
                     );
-                    if ui
-                        .add(Slider::new(&mut env.wind_turbulence, 0.0..=0.3))
-                        .changed()
-                    {
-                        env.mark_dirty();
-                    }
-                    ui.end_row();
-
-                    ui.label("Anim strength")
-                        .on_hover_text("Vertex-shader sway amplitude applied every frame.");
-                    ui.add(Slider::new(&mut env.wind_anim_strength, 0.0..=0.1).max_decimals(3));
-                    ui.end_row();
+                    // Animated sway is a shader effect — it needs no geometry rebuild.
+                    widget::row_hover(
+                        ui,
+                        "Anim strength",
+                        "Vertex-shader sway amplitude applied every frame.",
+                        Slider::new(&mut env.wind_anim_strength, 0.0..=0.1).max_decimals(3),
+                    );
                 });
 
-            // Space Pruning
             ui.strong("Space Pruning");
             Grid::new("env_pruning_grid")
                 .num_columns(2)
                 .striped(true)
                 .show(ui, |ui| {
-                    ui.label("Enabled").on_hover_text(
+                    dirty |= widget::check_row(
+                        ui,
+                        "Enabled",
                         "Cut branches whose tip enters a voxel cell already occupied by another \
                          branch. Produces natural crown shaping and prevents interpenetration \
                          between neighbouring plants.",
+                        &mut env.space_pruning,
                     );
-                    if ui.checkbox(&mut env.space_pruning, "").changed() {
-                        env.mark_dirty();
-                    }
-                    ui.end_row();
-
                     if env.space_pruning {
-                        ui.label("Cell size").on_hover_text(
+                        dirty |= widget::row_hover(
+                            ui,
+                            "Cell size",
                             "Voxel resolution in world units. Smaller = finer pruning and denser \
                              packing; larger = only coarse overlap is detected.",
+                            Slider::new(&mut env.occupancy_cell_size, 0.1..=2.0).fixed_decimals(2),
                         );
-                        if ui
-                            .add(
-                                Slider::new(&mut env.occupancy_cell_size, 0.1..=2.0)
-                                    .fixed_decimals(2),
-                            )
-                            .changed()
-                        {
-                            env.mark_dirty();
-                        }
-                        ui.end_row();
                     }
                 });
 
-            // Light & Appearance
             ui.strong("Light & Appearance");
             Grid::new("env_light_grid")
                 .num_columns(2)
                 .striped(true)
                 .show(ui, |ui| {
-                    ui.label("Light position").on_hover_text(
+                    dirty |= widget::vec3_row(
+                        ui,
+                        "Light position",
                         "World-space position of the directional light source used for shading \
                          and phototropism.",
+                        &mut env.light_position,
+                        1.0,
                     );
-                    ui.horizontal(|ui| {
-                        let mut changed = false;
-                        changed |= ui
-                            .add(
-                                DragValue::new(&mut env.light_position[0])
-                                    .prefix("x: ")
-                                    .speed(1.0),
-                            )
-                            .changed();
-                        changed |= ui
-                            .add(
-                                DragValue::new(&mut env.light_position[1])
-                                    .prefix("y: ")
-                                    .speed(1.0),
-                            )
-                            .changed();
-                        changed |= ui
-                            .add(
-                                DragValue::new(&mut env.light_position[2])
-                                    .prefix("z: ")
-                                    .speed(1.0),
-                            )
-                            .changed();
-                        if changed {
-                            env.mark_dirty();
-                        }
-                    });
-                    ui.end_row();
-
-                    ui.label("Ambient").on_hover_text(
+                    dirty |= widget::row_hover(
+                        ui,
+                        "Ambient",
                         "Minimum light level applied to all surfaces, simulating indirect \
                          skylight. 0 = fully dark shadows; 1 = flat unlit look.",
+                        Slider::new(&mut env.ambient, 0.0..=1.0),
                     );
-                    if ui.add(Slider::new(&mut env.ambient, 0.0..=1.0)).changed() {
-                        env.mark_dirty();
-                    }
-                    ui.end_row();
                 });
 
             if ui.button("Reset").clicked() {
                 *env = EnvironmentSettings::default();
+                dirty = true;
+            }
+
+            if dirty {
                 env.mark_dirty();
             }
         });
@@ -930,23 +818,23 @@ fn camera_ui(
     actions: &mut UiActions,
 ) {
     ui.collapsing("Camera", |ui| {
+        let cam = &mut settings.camera;
+
         Grid::new("camera_grid")
             .num_columns(2)
             .striped(true)
             .show(ui, |ui| {
-                ui.label("FOV");
-                ui.add(Slider::new(&mut settings.camera.fov, 30.0..=120.0).suffix("°"));
-                ui.end_row();
-
-                ui.label("Speed");
-                ui.add(Slider::new(&mut settings.camera.speed, 1.0..=100.0));
-                ui.end_row();
-
-                ui.label("Sensitivity");
-                ui.add(
-                    Slider::new(&mut settings.camera.sensitivity, 0.0001..=0.01).logarithmic(true),
+                widget::row(
+                    ui,
+                    "FOV",
+                    Slider::new(&mut cam.fov, 30.0..=120.0).suffix("°"),
                 );
-                ui.end_row();
+                widget::row(ui, "Speed", Slider::new(&mut cam.speed, 1.0..=100.0));
+                widget::row(
+                    ui,
+                    "Sensitivity",
+                    Slider::new(&mut cam.sensitivity, 0.0001..=0.01).logarithmic(true),
+                );
             });
 
         if camera_info.is_orbit {
@@ -954,38 +842,13 @@ fn camera_ui(
                 .num_columns(2)
                 .striped(true)
                 .show(ui, |ui| {
-                    ui.label("Orbit centre");
-                    ui.horizontal(|ui| {
-                        ui.add(
-                            DragValue::new(&mut settings.camera.orbit_centre[0])
-                                .prefix("x: ")
-                                .speed(1.0),
-                        )
-                        .changed();
-                        ui.add(
-                            DragValue::new(&mut settings.camera.orbit_centre[1])
-                                .prefix("y: ")
-                                .speed(1.0),
-                        )
-                        .changed();
-                        ui.add(
-                            DragValue::new(&mut settings.camera.orbit_centre[2])
-                                .prefix("z: ")
-                                .speed(1.0),
-                        )
-                        .changed();
-                    });
-                    ui.end_row();
-
-                    ui.label("Orbit speed");
-                    ui.add(
-                        Slider::new(&mut settings.camera.orbit_speed, 0.05..=5.0).logarithmic(true),
+                    widget::vec3_row(ui, "Orbit centre", "", &mut cam.orbit_centre, 1.0);
+                    widget::row(
+                        ui,
+                        "Orbit speed",
+                        Slider::new(&mut cam.orbit_speed, 0.05..=5.0).logarithmic(true),
                     );
-                    ui.end_row();
-
-                    ui.label("Auto-orbit");
-                    ui.checkbox(&mut settings.camera.auto_orbit, "");
-                    ui.end_row();
+                    widget::check_row(ui, "Auto-orbit", "", &mut cam.auto_orbit);
                 });
         }
 
@@ -1006,52 +869,41 @@ fn camera_ui(
     });
 }
 
+/// Slider over a 0–1 fraction, displayed and entered as a percentage.
+fn percent_slider(value: &mut f32) -> Slider<'_> {
+    Slider::new(value, 0.0..=1.0)
+        .custom_formatter(|v, _| format!("{:.0}%", v * 100.0))
+        .custom_parser(|s| s.trim_end_matches('%').parse().ok().map(|v: f64| v / 100.0))
+}
+
 fn display_ui(ui: &mut egui::Ui, settings: &mut Settings, actions: &mut UiActions) {
     ui.collapsing("Display", |ui| {
         Grid::new("display_grid")
             .num_columns(2)
             .striped(true)
             .show(ui, |ui| {
-                ui.label("Background");
-                ui.color_edit_button_rgb(&mut settings.display.background_colour);
-                ui.end_row();
+                let display = &mut settings.display;
 
-                ui.label("Ground");
-                ui.color_edit_button_rgb(&mut settings.display.ground_colour);
-                ui.end_row();
+                widget::rgb_row(ui, "Background", &mut display.background_colour);
+                widget::rgb_row(ui, "Ground", &mut display.ground_colour);
+                widget::check_row(ui, "Lines", "", &mut display.show_lines);
+                widget::check_row(ui, "Meshes", "", &mut display.show_meshes);
+                actions.scene_dirty |=
+                    widget::check_row(ui, "Debug HUD", "", &mut display.debug_mode);
+                widget::check_row(ui, "VSync", "", &mut display.vsync);
 
-                ui.label("Lines");
-                ui.checkbox(&mut settings.display.show_lines, "");
-                ui.end_row();
-
-                ui.label("Meshes");
-                ui.checkbox(&mut settings.display.show_meshes, "");
-                ui.end_row();
-
-                ui.label("Debug HUD");
-                if ui.checkbox(&mut settings.display.debug_mode, "").changed() {
-                    actions.scene_dirty = true;
-                }
-                ui.end_row();
-
-                ui.label("VSync");
-                ui.checkbox(&mut settings.display.vsync, "");
-                ui.end_row();
-
-                ui.label("Frame limit");
-                ui.horizontal(|ui| {
+                widget::custom_row(ui, "Frame limit", |ui| {
                     ui.add(
-                        DragValue::new(&mut settings.display.frame_target)
+                        DragValue::new(&mut display.frame_target)
                             .range(0..=480)
                             .speed(1.0),
                     );
-                    ui.label(if settings.display.frame_target == 0 {
+                    ui.label(if display.frame_target == 0 {
                         "unlimited"
                     } else {
                         "fps"
                     });
                 });
-                ui.end_row();
             });
 
         ui.collapsing("Culling", |ui| {
@@ -1059,33 +911,21 @@ fn display_ui(ui: &mut egui::Ui, settings: &mut Settings, actions: &mut UiAction
                 .num_columns(2)
                 .striped(true)
                 .show(ui, |ui| {
-                    ui.label("Frustum culling").on_hover_text(
+                    actions.scene_dirty |= widget::check_row(
+                        ui,
+                        "Frustum culling",
                         "Skip plants that are entirely outside the camera's view frustum. Disable \
                          if plants incorrectly disappear at screen edges.",
+                        &mut settings.cull.frustum_culling,
                     );
-                    if ui
-                        .checkbox(&mut settings.cull.frustum_culling, "")
-                        .changed()
-                    {
-                        actions.scene_dirty = true;
-                    }
-                    ui.end_row();
-
                     if settings.cull.frustum_culling {
-                        ui.label("Cull radius").on_hover_text(
+                        actions.scene_dirty |= widget::row_hover(
+                            ui,
+                            "Cull radius",
                             "Bounding-sphere radius used for frustum culling (world units). \
                              Increase if large plants are incorrectly culled near the screen edge.",
+                            Slider::new(&mut settings.cull.cull_radius, 1.0..=100.0).suffix(" m"),
                         );
-                        if ui
-                            .add(
-                                Slider::new(&mut settings.cull.cull_radius, 1.0..=100.0)
-                                    .suffix(" m"),
-                            )
-                            .changed()
-                        {
-                            actions.scene_dirty = true;
-                        }
-                        ui.end_row();
                     }
                 });
         });
@@ -1095,90 +935,53 @@ fn display_ui(ui: &mut egui::Ui, settings: &mut Settings, actions: &mut UiAction
                 .num_columns(2)
                 .striped(true)
                 .show(ui, |ui| {
-                    ui.label("Near (full)").on_hover_text(
+                    // Each threshold is clamped by its neighbours so the tiers stay ordered.
+                    let (near, mid, far) = (
+                        settings.lod.near_threshold,
+                        settings.lod.mid_threshold,
+                        settings.lod.far_threshold,
+                    );
+
+                    actions.scene_dirty |= widget::row_hover(
+                        ui,
+                        "Near (full)",
                         "Distance threshold for full-detail rendering (8 cylinder segments).",
+                        Slider::new(&mut settings.lod.near_threshold, 10.0..=mid),
                     );
-                    actions.scene_dirty |= ui
-                        .add(Slider::new(
-                            &mut settings.lod.near_threshold,
-                            10.0..=settings.lod.mid_threshold,
-                        ))
-                        .changed();
-                    ui.end_row();
-
-                    ui.label("Mid (medium)").on_hover_text(
+                    actions.scene_dirty |= widget::row_hover(
+                        ui,
+                        "Mid (medium)",
                         "Distance threshold for medium-detail rendering (5 cylinder segments).",
+                        Slider::new(&mut settings.lod.mid_threshold, near..=far),
                     );
-                    actions.scene_dirty |= ui
-                        .add(Slider::new(
-                            &mut settings.lod.mid_threshold,
-                            settings.lod.near_threshold..=settings.lod.far_threshold,
-                        ))
-                        .changed();
-                    ui.end_row();
-
-                    ui.label("Far (low)").on_hover_text(
+                    actions.scene_dirty |= widget::row_hover(
+                        ui,
+                        "Far (low)",
                         "Distance threshold for low-detail rendering (3 cylinder segments). \
                          Plants beyond this distance skip mesh generation.",
+                        Slider::new(&mut settings.lod.far_threshold, mid..=2000.0),
                     );
-                    actions.scene_dirty |= ui
-                        .add(Slider::new(
-                            &mut settings.lod.far_threshold,
-                            settings.lod.mid_threshold..=2000.0,
-                        ))
-                        .changed();
-                    ui.end_row();
-
-                    ui.label("Hysteresis").on_hover_text(
+                    actions.scene_dirty |= widget::row_hover(
+                        ui,
+                        "Hysteresis",
                         "Dead-zone around each LOD boundary. Prevents rapid geometry rebuilds \
                          when a plant sits right on a distance threshold.",
+                        Slider::new(&mut settings.cull.lod_hysteresis, 0.0..=20.0),
                     );
-                    actions.scene_dirty |= ui
-                        .add(Slider::new(&mut settings.cull.lod_hysteresis, 0.0..=20.0))
-                        .changed();
-                    ui.end_row();
 
-                    ui.label("Leaf skip (near)").on_hover_text(
-                        "Fraction of leaf quads randomly skipped at near LOD distance. 0 = off.",
-                    );
-                    actions.scene_dirty |= ui
-                        .add(
-                            egui::Slider::new(&mut settings.lod.leaf_skip_near, 0.0..=1.0)
-                                .custom_formatter(|v, _| format!("{:.0}%", v * 100.0))
-                                .custom_parser(|s| {
-                                    s.trim_end_matches('%').parse().ok().map(|v: f64| v / 100.0)
-                                }),
-                        )
-                        .changed();
-                    ui.end_row();
-
-                    ui.label("Leaf skip (mid)").on_hover_text(
-                        "Fraction of leaf quads randomly skipped at mid LOD distance. 0 = off.",
-                    );
-                    actions.scene_dirty |= ui
-                        .add(
-                            egui::Slider::new(&mut settings.lod.leaf_skip_mid, 0.0..=1.0)
-                                .custom_formatter(|v, _| format!("{:.0}%", v * 100.0))
-                                .custom_parser(|s| {
-                                    s.trim_end_matches('%').parse().ok().map(|v: f64| v / 100.0)
-                                }),
-                        )
-                        .changed();
-                    ui.end_row();
-
-                    ui.label("Leaf skip (far)").on_hover_text(
-                        "Fraction of leaf quads randomly skipped at far LOD distance. 0 = off.",
-                    );
-                    actions.scene_dirty |= ui
-                        .add(
-                            egui::Slider::new(&mut settings.lod.leaf_skip_far, 0.0..=1.0)
-                                .custom_formatter(|v, _| format!("{:.0}%", v * 100.0))
-                                .custom_parser(|s| {
-                                    s.trim_end_matches('%').parse().ok().map(|v: f64| v / 100.0)
-                                }),
-                        )
-                        .changed();
-                    ui.end_row();
+                    for (label, value) in [
+                        ("Leaf skip (near)", &mut settings.lod.leaf_skip_near),
+                        ("Leaf skip (mid)", &mut settings.lod.leaf_skip_mid),
+                        ("Leaf skip (far)", &mut settings.lod.leaf_skip_far),
+                    ] {
+                        actions.scene_dirty |= widget::row_hover(
+                            ui,
+                            label,
+                            "Fraction of leaf quads randomly skipped at this LOD distance. 0 = \
+                             off.",
+                            percent_slider(value),
+                        );
+                    }
                 });
         });
 

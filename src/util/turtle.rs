@@ -26,13 +26,11 @@ pub enum Action {
     Colour(Vec3),
     Push,
     Pop,
-    /// Terminate the current branch: skip all remaining actions up to the matching `]`.
-    /// Implements the `%` cut symbol from ABOP
     Cut,
     Nop,
 }
 
-/// Per-branch state saved on Push and restored on Pop.
+/// Per-branch state saved on Push and restored on Pop
 #[derive(Debug, Clone, Copy)]
 struct StackEntry {
     entry_idx: usize,
@@ -58,36 +56,26 @@ pub struct Turtle {
     wind_direction: Vec3,
     wind_strength: f32,
     wind_turbulence: f32,
-    /// When false, wind deflection is skipped (reserved for vertex-shader animation).
     wind_baked: bool,
     // Taper
     taper: f32,
     // LOD
     lod_segments: usize,
     lod_min_radius: f32,
-    // Proprioception — discrete approximation of Bastien et al. (2015) AC model.
-    // prop_curvature accumulates per-branch bending; proprioception_gamma controls
-    // the straightening rate (γ). Reset to zero on Push.
+    // Proprioception (straightening)
     prop_curvature: f32,
     prop_bend_axis: Vec3,
     proprioception_gamma: f32,
-    // Ornstein–Uhlenbeck heading drift (correlated stochastic variation).
-    // ou_drift is a 3-vector whose direction is the current rotation axis and whose
-    // magnitude is the current rotation speed. Reset to zero on Push.
+    // Heading drift
     ou_drift: Vec3,
     variation_noise_strength: f32,
     variation_decay_rate: f32,
-    // Arc-length along the current branch segment (reset on Push).
-    // Used instead of stack depth for continuous taper.
+    // Arc-length along the current branch segment
     branch_arc_length: f32,
-    // Per-branch colour OU drift (reset on Push).
+    // Per-branch colour drift
     colour_drift: Vec3,
     colour_variation: f32,
-    // Voxel-grid space pruning.
-    // `occupancy_grid`      — cells from fully-built plants; checked but never written during build.
-    // `current_plant_marks` — cells marked by the plant currently being built; written but not
-    //                         checked, so intra-plant branches never block each other.
-    // `reset()` flushes current_plant_marks into occupancy_grid before the next plant starts.
+    // Space pruning
     occupancy_grid: VoxelSet,
     current_plant_marks: VoxelSet,
     occupancy_cell_size: f32,
@@ -107,8 +95,8 @@ pub struct Turtle {
     mesh_tangents: Vec<Vec3>,
 }
 
-impl Turtle {
-    pub fn new(pos: Vec3, colour: Vec3) -> Self {
+impl Default for Turtle {
+    fn default() -> Self {
         Turtle {
             scale: 1.0,
             heading: Vec3::X,
@@ -138,13 +126,9 @@ impl Turtle {
             space_pruning: false,
             leaf_skip_prob: 0.0,
             stack: Vec::new(),
-            path_buf: vec![pos],
-            colour_buf: vec![colour],
-            path_entries: vec![PathEntry {
-                jump: true,
-                path_idx: 0,
-                colour_idx: 0,
-            }],
+            path_buf: Vec::new(),
+            colour_buf: Vec::new(),
+            path_entries: Vec::new(),
             mesh_vertices: Vec::new(),
             mesh_normals: Vec::new(),
             mesh_colours: Vec::new(),
@@ -153,62 +137,47 @@ impl Turtle {
             mesh_tangents: Vec::new(),
         }
     }
+}
 
-    /// Resets the turtle's path, position, heading, normal, colour, and all per-plant state.
-    pub fn reset(&mut self, pos: Vec3, colour: Vec3) {
-        self.scale = 1.0;
-        self.heading = Vec3::X;
-        self.normal = Vec3::Y;
-        self.tropism_direction = Vec3::Y;
-        self.tropism_strength = 0.0;
-        self.gravitropism_strength = 0.0;
-        self.wind_direction = Vec3::X;
-        self.wind_strength = 0.0;
-        self.wind_turbulence = 0.0;
-        self.wind_baked = true;
-        self.taper = 1.0;
-        self.lod_segments = DEFAULT_CYLINDER_SEGMENTS;
-        self.lod_min_radius = 0.0;
-        self.prop_curvature = 0.0;
-        self.prop_bend_axis = Vec3::Y;
-        self.proprioception_gamma = 0.0;
-        self.ou_drift = Vec3::ZERO;
-        self.variation_noise_strength = 0.0;
-        self.variation_decay_rate = 0.1;
-        self.branch_arc_length = 0.0;
-        self.colour_drift = Vec3::ZERO;
-        self.colour_variation = 0.0;
-        // Flush this plant's marks into the shared grid so that subsequent plants can
-        // be pruned by them. The grid itself is NOT cleared here — it persists across
-        // plants. Call clear_occupancy() once at the start of a full scene rebuild.
-        self.occupancy_grid.extend(self.current_plant_marks.drain());
-        self.occupancy_cell_size = 0.5;
-        self.space_pruning = false;
-        self.leaf_skip_prob = 0.0;
-        self.stack.clear();
-        self.path_buf.clear();
+impl Turtle {
+    pub fn new(pos: Vec3, colour: Vec3) -> Self {
+        let mut turtle = Self::default();
+        turtle.start_path(pos, colour);
+        turtle
+    }
+
+    /// Seeds the path buffers with the starting position and colour
+    fn start_path(&mut self, pos: Vec3, colour: Vec3) {
         self.path_buf.push(pos);
-        self.colour_buf.clear();
         self.colour_buf.push(colour);
-        self.path_entries.clear();
         self.path_entries.push(PathEntry {
             jump: true,
             path_idx: 0,
             colour_idx: 0,
         });
+    }
+
+    /// Resets the turtle's path, position, heading, normal, colour, and all per-plant state
+    pub fn reset(&mut self, pos: Vec3, colour: Vec3) {
+        // Flush this plant's marks into the shared grid so that subsequent plants will be pruned
+        self.occupancy_grid.extend(self.current_plant_marks.drain());
+
+        // Reset reusing previous allocations
+        self.stack.clear();
+        self.path_buf.clear();
+        self.colour_buf.clear();
+        self.path_entries.clear();
         self.mesh_vertices.clear();
         self.mesh_normals.clear();
         self.mesh_colours.clear();
         self.mesh_indices.clear();
         self.mesh_uvs.clear();
         self.mesh_tangents.clear();
+
+        self.start_path(pos, colour);
     }
 
-    /// Execute a sequence of actions, honouring the Cut (`%`) symbol and clip-volume pruning.
-    ///
-    /// When Cut is encountered inside a `[…]` branch, all subsequent actions up to the
-    /// matching `]` are skipped. Space-constrained pruning (clip sphere) triggers the same
-    /// cut mechanism when the turtle's position leaves the allowed volume.
+    /// Execute a sequence of actions
     pub fn do_actions<A: Into<Action> + Copy>(&mut self, actions: &[A]) {
         let mut depth: usize = 0;
         let mut cut_at: Option<usize> = None;
@@ -221,7 +190,6 @@ impl Turtle {
                     Action::Push => depth += 1,
                     Action::Pop => {
                         if depth == cd {
-                            // Reached the `]` that closes the cut branch — restore state
                             cut_at = None;
                             self.pop();
                         }
@@ -245,28 +213,28 @@ impl Turtle {
                         }
                     }
                     other => {
-                        // Space pruning: for Branch actions, check every cell the cylinder
-                        // passes through, not just the tip. Capture base+end before executing
-                        // so both the check and the post-mark use the same straight segment.
-                        let branch_segment = if self.space_pruning
+                        let mut branch_segment = None;
+
+                        // Space pruning
+                        if self.space_pruning
                             && let Action::Branch(length, diameter) = other
                         {
                             let base = self.pos();
                             let end = base + (length * self.scale) * self.heading;
-                            // Use the base (untapered) radius — largest value along the branch.
                             let radius = (diameter * self.scale) * 0.5;
+
+                            // Cut if branch intersects
                             if depth > 0 && self.segment_occupied(base, end, radius) {
                                 cut_at = Some(depth);
                                 continue;
                             }
-                            Some((base, end, radius))
-                        } else {
-                            None
-                        };
+
+                            branch_segment = Some((base, end, radius));
+                        }
 
                         self.do_action(other);
 
-                        // Mark all cells the cylinder occupies so later plants respect it.
+                        // Mark all cells the cylinder occupies
                         if let Some((base, end, radius)) = branch_segment {
                             self.mark_segment(base, end, radius);
                         }
@@ -291,7 +259,7 @@ impl Turtle {
         };
     }
 
-    /// Pushes the current turtle state to the stack and resets per-branch accumulators.
+    /// Pushes the current turtle state to the stack and resets per-branch accumulators
     pub fn push(&mut self) {
         self.stack.push(StackEntry {
             entry_idx: self.path_entries.len() - 1,
@@ -311,7 +279,7 @@ impl Turtle {
         self.colour_drift = Vec3::ZERO;
     }
 
-    /// Pops the last turtle state from the stack, restoring position, heading, and accumulators.
+    /// Pops the last turtle state from the stack, restoring position, heading, and accumulators
     pub fn pop(&mut self) {
         if let Some(saved) = self.stack.pop() {
             let prev = self.path_entries[saved.entry_idx];
@@ -339,11 +307,9 @@ impl Turtle {
     /// Order of operations:
     /// 1. Advance position using the current heading (before any deflection)
     /// 2. Phototropism and gravitropism
-    /// 3. Wind deflection (if `wind_baked`)
-    /// 4. Proprioceptive correction (Bastien et al. AC model)
-    /// 5. Ornstein–Uhlenbeck heading drift — applied LAST so the heading change takes effect
-    ///    on the *next* step; this ensures `branch()` tip vertices are always co-located with
-    ///    the turtle position after travel, eliminating visible gaps between segments.
+    /// 3. Wind deflection
+    /// 4. Proprioceptive correction
+    /// 5. Heading drift
     /// 6. Increment arc-length accumulator
     pub fn travel(&mut self, distance: f32) {
         let heading_before = self.heading;
@@ -369,19 +335,16 @@ impl Turtle {
         // 4. Proprioceptive correction
         self.apply_proprioception(heading_before, distance);
 
-        // 5. OU drift — deferred to end so current step's geometry is unaffected
+        // 5. Heading drift
         self.apply_ou_variation();
 
         // 6. Arc-length accumulator for taper
         self.branch_arc_length += distance;
     }
 
-    /// Generate a cylinder mesh and advance the turtle.
-    ///
-    /// Branch diameter tapers exponentially with arc-length travelled along the current branch
-    /// segment (reset at each Push), providing continuous tapering independent of branching depth.
+    /// Generate a cylinder mesh and advance the turtle
     pub fn branch(&mut self, length: f32, diameter: f32) {
-        // Arc-length taper: full diameter at arc_length=0, decreasing with distance.
+        // Arc-length taper: full diameter at arc_length=0, decreasing with distance
         let tapered_diameter = diameter * self.taper.powf(self.branch_arc_length);
         let radius = (tapered_diameter * self.scale) * 0.5;
 
@@ -392,17 +355,17 @@ impl Turtle {
         }
 
         let base_pos = self.pos();
-        let tip_pos = base_pos + (length * self.scale) * self.heading;
-        let segments = self.lod_segments;
-
-        let binormal = self.heading.cross(self.normal).normalize();
-        // Apply colour drift to cylinder colour (clamped to valid range)
         let base_colour = *self.colour_buf.last().unwrap();
-        let colour = (base_colour + self.colour_drift).clamp(Vec3::ZERO, Vec3::ONE);
         let base_idx = self.mesh_vertices.len() as u32;
 
-        for i in 0..segments {
-            let angle = (i as f32 / segments as f32) * TAU;
+        let tip_pos = base_pos + (length * self.scale) * self.heading;
+        let binormal = self.heading.cross(self.normal).normalize();
+
+        // Apply colour drift to cylinder colour (clamped to valid range)
+        let colour = (base_colour + self.colour_drift).clamp(Vec3::ZERO, Vec3::ONE);
+
+        for i in 0..self.lod_segments {
+            let angle = (i as f32 / self.lod_segments as f32) * TAU;
             let (sin, cos) = angle.sin_cos();
             let radial = cos * self.normal + sin * binormal;
             let offset = radial * radius;
@@ -423,8 +386,8 @@ impl Turtle {
         }
 
         // Generate quad indices for each segment (2 triangles per quad)
-        for i in 0..segments as u32 {
-            let next = (i + 1) % segments as u32;
+        for i in 0..self.lod_segments as u32 {
+            let next = (i + 1) % self.lod_segments as u32;
             let b0 = base_idx + i * 2;
             let t0 = base_idx + i * 2 + 1;
             let b1 = base_idx + next * 2;
@@ -445,7 +408,7 @@ impl Turtle {
         self.travel(length);
     }
 
-    /// Generate a double-sided leaf quad at the current position.
+    /// Generate a double-sided leaf quad at the current position
     pub fn leaf(&mut self, width: f32, height: f32) {
         if self.leaf_skip_prob > 0.0 && rng::random_range(0.0f32, 1.0) < self.leaf_skip_prob {
             return;
@@ -473,7 +436,7 @@ impl Turtle {
         let v0 = row / 3.0;
         let v1 = (row + 1.0) / 3.0;
 
-        // Front face vertices (normal pointing outward)
+        // Front face vertices
         self.mesh_vertices.extend([bl, br, tl, tr]);
         for _ in 0..4 {
             self.mesh_normals.push(self.normal);
@@ -483,7 +446,7 @@ impl Turtle {
         self.mesh_uvs
             .extend([[u0, v1], [u1, v1], [u0, v0], [u1, v0]]);
 
-        // Back face vertices (normal pointing opposite)
+        // Back face vertices
         self.mesh_vertices.extend([bl, br, tl, tr]);
         for _ in 0..4 {
             self.mesh_normals.push(-self.normal);
@@ -501,7 +464,7 @@ impl Turtle {
             base_idx + 1,
             base_idx + 2,
             base_idx + 3,
-            // Back face triangles (reversed winding)
+            // Back face triangles
             base_idx + 4,
             base_idx + 5,
             base_idx + 6,
@@ -535,88 +498,83 @@ impl Turtle {
         self.colour_buf.push(colour);
     }
 
+    /// Set the scale
     pub fn set_scale(&mut self, scale: f32) {
         self.scale = scale;
     }
 
+    /// Set the phototrophism direction and strength
     pub fn set_tropism(&mut self, direction: Vec3, strength: f32) {
         self.tropism_direction = direction;
         self.tropism_strength = strength;
     }
 
-    /// Sets the gravitropism strength. Positive values push heading toward +Y
-    /// (negative gravitropism — shoots growing against gravity).
+    /// Set the gravitropism strength
     pub fn set_gravitropism(&mut self, strength: f32) {
         self.gravitropism_strength = strength;
     }
 
     /// Sets the wind direction (normalised horizontal vector), directional strength,
-    /// and turbulence (max random rotation in radians per travel step).
+    /// and turbulence (max random rotation in radians per travel step)
     pub fn set_wind(&mut self, direction: Vec3, strength: f32, turbulence: f32) {
         self.wind_direction = direction;
         self.wind_strength = strength;
         self.wind_turbulence = turbulence;
     }
 
-    /// Controls whether wind deflection is baked into geometry.
-    /// Set `false` to skip wind at build time (e.g. when wind will be applied in a vertex shader).
+    /// Controls whether wind deflection is baked into geometry
     pub fn set_wind_baked(&mut self, baked: bool) {
         self.wind_baked = baked;
     }
 
-    /// Sets the taper ratio applied per unit of arc-length along a branch.
-    /// `1.0` = uniform width; `0.7` = branch shrinks to 70% diameter per unit arc-length.
+    /// Sets the taper applied per unit of arc-length along a branch
+    /// `1.0` = uniform width; `0.7` = branch shrinks to 70% diameter per unit arc-length
     pub fn set_taper(&mut self, taper: f32) {
         self.taper = taper;
     }
 
-    /// Set LOD parameters for this turtle.
-    /// `segments` controls cylinder quality (0 = skip mesh generation entirely).
-    /// `min_radius` skips branches thinner than this value (in world units after scale).
+    /// Set LOD parameters for this turtle
+    /// - `segments` controls cylinder quality (0 = skip mesh generation entirely)
+    /// - `min_radius` skips branches thinner than this value
     pub fn set_lod(&mut self, segments: usize, min_radius: f32) {
         self.lod_segments = segments;
         self.lod_min_radius = min_radius;
     }
 
-    /// Set the probability that any individual leaf quad is skipped. `0.0` = never skip, `1.0` = always skip.
+    /// Set the probability that any individual leaf quad is skipped
     pub fn set_leaf_skip_prob(&mut self, prob: f32) {
         self.leaf_skip_prob = prob.clamp(0.0, 1.0);
     }
 
-    /// Set the proprioceptive self-correction rate (γ in the Bastien et al. AC model).
-    /// Higher values produce stronger gravitropic straightening within each branch.
-    /// `0.0` disables proprioception (default).
+    /// Set the proprioceptive self-correction rate
     pub fn set_proprioception(&mut self, gamma: f32) {
         self.proprioception_gamma = gamma;
     }
 
-    /// Set Ornstein–Uhlenbeck correlated heading drift parameters.
-    /// `noise_strength` controls the per-step noise amplitude.
-    /// `decay_rate` ∈ \[0,1\] controls how quickly the drift returns to zero (θ).
-    /// `colour_variation` controls per-branch colour OU drift amplitude.
+    /// Set heading drift parameters
+    /// - `noise_strength` controls the per-step noise amplitude
+    /// - `decay_rate` ∈ \[0,1\] controls how quickly the drift returns to zero (θ)
+    /// - `colour_variation` controls per-branch colour drift amplitude
     pub fn set_variation(&mut self, noise_strength: f32, decay_rate: f32, colour_variation: f32) {
         self.variation_noise_strength = noise_strength;
         self.variation_decay_rate = decay_rate.clamp(0.0, 1.0);
         self.colour_variation = colour_variation;
     }
 
-    /// Enable voxel-grid space pruning. When enabled, a branch whose tip falls in an
-    /// already-occupied cell is cut rather than generated. `cell_size` controls voxel
-    /// resolution in world units; smaller values give finer pruning at higher memory cost.
+    /// Enable voxel-grid space pruning
     pub fn set_space_pruning(&mut self, enabled: bool, cell_size: f32) {
         self.space_pruning = enabled;
         self.occupancy_cell_size = cell_size.max(0.01);
     }
 
-    /// Clear both occupancy sets. Call once at the start of each full scene rebuild
-    /// so that plants from the previous build do not block the new one.
+    /// Clear both occupancy sets
     pub fn clear_occupancy(&mut self) {
         self.occupancy_grid.clear();
         self.current_plant_marks.clear();
     }
 
-    /// Ornstein–Uhlenbeck update: applies correlated random drift to heading and colour.
-    /// ou_drift evolves as: drift = drift * (1 - θ) + noise * σ
+    /// Applies correlated random drift to heading and colour
+    /// - drift = drift * (1 - θ) + noise * σ
     fn apply_ou_variation(&mut self) {
         if self.variation_noise_strength <= 0.0 {
             return;
@@ -651,7 +609,7 @@ impl Turtle {
         }
     }
 
-    /// Apply a random rotation in the plane perpendicular to heading to simulate wind gusts.
+    /// Apply a random rotation in the plane perpendicular to heading to simulate wind gusts
     fn apply_wind_turbulence(&mut self) {
         if self.wind_turbulence <= 0.0 {
             return;
@@ -671,7 +629,6 @@ impl Turtle {
     }
 
     /// Rotate heading toward `direction` by an amount proportional to `strength`
-    /// and the sine of the angle between heading and direction (via cross product).
     fn apply_tropism_toward(&mut self, direction: Vec3, strength: f32) {
         if strength <= 0.0 {
             return;
@@ -688,23 +645,20 @@ impl Turtle {
         }
     }
 
-    /// Discrete proprioceptive correction (simplified Bastien et al. 2015 AC model).
-    ///
-    /// Accumulates curvature from heading deflection caused by tropisms, then applies
-    /// a counter-rotation proportional to γ·C to straighten the shoot. The curvature
-    /// signal decays each step at rate γ (critical damping at γ ≈ 1).
+    /// Discrete proprioceptive correction (straightening)
     fn apply_proprioception(&mut self, heading_before: Vec3, length: f32) {
         if self.proprioception_gamma <= 0.0 {
             return;
         }
-        let torque = heading_before.cross(self.heading);
-        let bend_mag = torque.length(); // ≈ sin(Δθ)
+
+        let (bend_axis, bend_mag) = heading_before.cross(self.heading).normalize_and_length();
         if bend_mag > 1e-6 {
-            // Accumulate curvature weighted by segment length (integral of local curvature)
+            // Accumulate curvature weighted by segment length
             self.prop_curvature += bend_mag * length;
-            self.prop_bend_axis = torque.normalize();
+            self.prop_bend_axis = bend_axis;
         }
-        // Apply straightening correction opposite to accumulated curvature
+
+        // Apply straightening correction opposite to curvature
         let correction = self.proprioception_gamma * self.prop_curvature;
         if correction > 1e-6 && self.prop_bend_axis.length_squared() > 1e-12 {
             self.heading = self
@@ -716,11 +670,12 @@ impl Turtle {
                 .rotate_axis(self.prop_bend_axis, -correction)
                 .normalize();
         }
-        // Decay curvature signal (exponential decay with rate γ)
+
+        // Decay curvature signal
         self.prop_curvature *= 1.0 - self.proprioception_gamma.min(0.99);
     }
 
-    /// Convert a world-space position to voxel grid coordinates.
+    /// Convert a world-space position to voxel grid coordinates
     fn world_to_cell(&self, pos: Vec3) -> (i32, i32, i32) {
         let s = 1.0 / self.occupancy_cell_size;
         (
@@ -737,8 +692,8 @@ impl Turtle {
     /// When `radius < cell_size` the expansion is zero and this reduces to a centre-line check.
     fn segment_occupied(&self, start: Vec3, end: Vec3, radius: f32) -> bool {
         let seg = end - start;
-        let len = seg.length();
-        let steps = (len / self.occupancy_cell_size).ceil().max(1.0);
+
+        let steps = (seg.length() / self.occupancy_cell_size).ceil().max(1.0);
         let r = (radius / self.occupancy_cell_size).ceil() as i32;
 
         (0..=steps as usize).any(|i| {

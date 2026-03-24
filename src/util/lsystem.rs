@@ -1,6 +1,20 @@
-use std::fmt::Display;
+use std::fmt::{self, Display, Formatter};
 
 use crate::util::rng::random_bool;
+
+/// Writes a signed rotation using the turtle symbols
+pub fn fmt_angle(f: &mut Formatter<'_>, pos: char, neg: char, angle: f32) -> fmt::Result {
+    if angle >= 0.0 {
+        write!(f, "{pos}({angle})")
+    } else {
+        write!(f, "{neg}({})", angle.abs())
+    }
+}
+
+/// Concatenates a symbol sequence into its string form
+fn join<S: Display>(symbols: &[S]) -> String {
+    symbols.iter().map(S::to_string).collect()
+}
 
 /// Whether a symbol is subject to rewriting
 #[derive(Debug, PartialEq, Copy, Clone)]
@@ -92,42 +106,17 @@ pub enum Rule<'a, S: Symbol> {
 }
 
 impl<S: Symbol + Display> Display for Rule<'_, S> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Normal(s, res) => write!(
-                f,
-                "{} \\rightarrow {}",
-                s,
-                res.iter()
-                    .map(|s| s.to_string())
-                    .collect::<Vec<String>>()
-                    .concat()
-            ),
-            Self::Stochastic(s, prob, res) => write!(
-                f,
-                "{} \\xrightarrow{{{}}} {}",
-                s,
-                prob,
-                res.iter()
-                    .map(|s| s.to_string())
-                    .collect::<Vec<String>>()
-                    .concat()
-            ),
-            Self::Parametric(s, _) => write!(f, "{}: cond \\rightarrow res", s),
+            Self::Normal(s, res) => write!(f, "{s} \\rightarrow {}", join(res)),
+            Self::Stochastic(s, prob, res) => {
+                write!(f, "{s} \\xrightarrow{{{prob}}} {}", join(res))
+            }
+            Self::Parametric(s, _) => write!(f, "{s}: cond \\rightarrow res"),
             Self::ContextSensitive(s, l, r, res) => {
                 let left = l.map_or_else(String::new, |l| format!("{l} < "));
                 let right = r.map_or_else(String::new, |r| format!(" > {r}"));
-                write!(
-                    f,
-                    "{}{}{} \\rightarrow {}",
-                    left,
-                    s,
-                    right,
-                    res.iter()
-                        .map(|s| s.to_string())
-                        .collect::<Vec<String>>()
-                        .concat()
-                )
+                write!(f, "{left}{s}{right} \\rightarrow {}", join(res))
             }
         }
     }
@@ -182,22 +171,12 @@ pub struct LSystem<'a, S: Symbol> {
 }
 
 impl<S: Symbol + Display> Display for LSystem<'_, S> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            " \\omega &: {}\\{}",
-            self.state
-                .iter()
-                .map(|s| s.to_string())
-                .collect::<Vec<String>>()
-                .concat(),
-            self.rules
-                .iter()
-                .enumerate()
-                .map(|(i, r)| format!("\n p_{i} &: {r} \\\\"))
-                .collect::<Vec<String>>()
-                .concat()
-        )
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, " \\omega &: {}\\", join(&self.state))?;
+        for (i, rule) in self.rules.iter().enumerate() {
+            write!(f, "\n p_{i} &: {rule} \\\\")?;
+        }
+        Ok(())
     }
 }
 

@@ -10,45 +10,63 @@ pub mod wildflower;
 
 use glam::Vec3;
 
-use crate::{settings::PlantType, util::turtle::Action};
+use crate::{
+    settings::PlantType,
+    util::{rng, turtle::Action},
+};
 
-/// Age-based bark colour, interpolating from `young` to `old` over `max_age` years.
+/// Hermite interpolant (3t² − 2t³), clamped to `[0, 1]`.
+pub fn smoothstep(t: f32) -> f32 {
+    let t = t.clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
+}
+
+/// Age-based bark colour
 pub fn lerp_bark_colour(age: u32, max_age: f32, young: Vec3, old: Vec3) -> Vec3 {
     young.lerp(old, (age as f32 / max_age).min(1.0))
 }
 
-/// Seasonal dormancy factor in `[0, max_dormancy]`.
-///
-/// Onset mid-autumn (season ≈ 0.50), full dormancy by mid-winter (0.82),
-/// partial recovery late-winter (0.90), fully recovered at spring (1.0 ≡ 0.0).
-/// `offset` is a per-plant phase shift in (−0.05, +0.05) that staggers onset
-/// and recovery across individuals of the same species.
+/// Seasonal dormancy factor
 pub fn dormancy_factor(season: f32, offset: f32, max_dormancy: f32) -> f32 {
-    const ONSET: f32 = 0.50;
-    const FULL: f32 = 0.82;
-    const RECOVER: f32 = 0.90;
+    const ONSET: f32 = 0.50; // mid-autumn
+    const FULL: f32 = 0.82; // mid-winter
+    const RECOVER: f32 = 0.90; // late-winter
+
     let s = (season + offset).rem_euclid(1.0);
     if s < ONSET {
         0.0
     } else if s < FULL {
-        let t = (s - ONSET) / (FULL - ONSET);
-        max_dormancy * t * t * (3.0 - 2.0 * t)
+        max_dormancy * smoothstep((s - ONSET) / (FULL - ONSET))
     } else if s < RECOVER {
         max_dormancy
     } else {
-        let t = (s - RECOVER) / (1.0 - RECOVER);
-        max_dormancy * (1.0 - t * t * (3.0 - 2.0 * t))
+        max_dormancy * (1.0 - smoothstep((s - RECOVER) / (1.0 - RECOVER)))
+    }
+}
+
+/// Foliage colour shifting
+pub fn autumn_colour(season: f32, summer: Vec3, autumn: Vec3, start: f32, end: f32) -> Vec3 {
+    summer.lerp(autumn, smoothstep((season - start) / (end - start)))
+}
+
+/// Early-spring growth surge
+pub fn spring_surge(season: f32) -> f32 {
+    const PEAK: f32 = 0.08;
+    const END: f32 = 0.18;
+
+    if season < PEAK {
+        smoothstep(season / PEAK)
+    } else if season < END {
+        1.0 - smoothstep((season - PEAK) / (END - PEAK))
+    } else {
+        0.0
     }
 }
 
 // ── Environment ──
 
-/// Environmental context passed to each plant during geometry generation.
-/// Seasonal and other ambient properties are read directly from here so
-/// plants can express them as L-system rules rather than cached scalar fields.
 #[derive(Debug, Clone, Copy)]
 pub struct PlantEnvironment {
-    /// Fractional season in [0, 1): 0 = spring, 0.25 = summer, 0.5 = autumn, 0.75 = winter.
     pub season: f32,
 }
 
@@ -61,10 +79,116 @@ pub trait Plant: Send {
     fn set_iteration(&mut self, iteration: u32);
     fn actions(&mut self, env: &PlantEnvironment) -> &[Action];
 
-    /// Draw plant-specific UI controls. Returns true if the scene needs to be rebuilt.
+    /// Draw plant-specific UI controls, returns true if the scene needs to be rebuilt
     fn ui(&mut self, ui: &mut egui::Ui) -> bool;
     fn colour(&self) -> Vec3;
     fn clone_boxed(&self) -> Box<dyn Plant>;
+}
+
+// ── Species ──
+
+pub trait Species: Send + 'static {
+    const TYPE: PlantType;
+    type Params: Clone + Default + Send;
+
+    fn generate(age: u32, params: &Self::Params, season: f32, dormancy_offset: f32) -> Vec<Action>;
+    fn max_iterations(params: &Self::Params) -> u32;
+    fn colour(params: &Self::Params, iteration: u32) -> Vec3;
+    fn ui(params: &mut Self::Params, ui: &mut egui::Ui) -> bool;
+}
+
+const INITIAL_SEASON: f32 = 0.25;
+const SEASON_EPSILON: f32 = 0.02;
+
+/// An instance of some [`Species`]
+pub struct PlantBase<S: Species> {
+    iteration: u32,
+    dirty: bool,
+    cached_actions: Vec<Action>,
+    params: S::Params,
+    last_season: f32,
+    dormancy_offset: f32,
+}
+
+impl<S: Species> Default for PlantBase<S> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<S: Species> PlantBase<S> {
+    pub fn new() -> Self {
+        let params = S::Params::default();
+        let dormancy_offset = rng::random_range(-0.05, 0.05);
+        Self {
+            iteration: 0,
+            dirty: false,
+            cached_actions: S::generate(0, &params, INITIAL_SEASON, dormancy_offset),
+            params,
+            last_season: INITIAL_SEASON,
+            dormancy_offset,
+        }
+    }
+}
+
+impl<S: Species> Plant for PlantBase<S> {
+    fn plant_type(&self) -> PlantType {
+        S::TYPE
+    }
+
+    fn iteration(&self) -> u32 {
+        self.iteration
+    }
+
+    fn max_iterations(&self) -> u32 {
+        S::max_iterations(&self.params)
+    }
+
+    fn set_iteration(&mut self, iteration: u32) {
+        if self.iteration != iteration {
+            self.iteration = iteration;
+            self.dirty = true;
+        }
+    }
+
+    fn colour(&self) -> Vec3 {
+        S::colour(&self.params, self.iteration)
+    }
+
+    fn ui(&mut self, ui: &mut egui::Ui) -> bool {
+        let changed = S::ui(&mut self.params, ui);
+        self.dirty |= changed;
+        changed
+    }
+
+    fn actions(&mut self, env: &PlantEnvironment) -> &[Action] {
+        if (env.season - self.last_season).abs() > SEASON_EPSILON {
+            self.dirty = true;
+        }
+        if self.dirty {
+            self.cached_actions = S::generate(
+                self.iteration,
+                &self.params,
+                env.season,
+                self.dormancy_offset,
+            );
+            self.last_season = env.season;
+            self.dirty = false;
+        }
+        &self.cached_actions
+    }
+
+    fn clone_boxed(&self) -> Box<dyn Plant> {
+        // Actions are left empty and rebuilt on next access rather than cloned
+        Box::new(Self {
+            iteration: self.iteration,
+            dirty: true,
+            cached_actions: Vec::new(),
+            params: self.params.clone(),
+            last_season: self.last_season,
+            dormancy_offset: self.dormancy_offset,
+        })
+    }
 }
 
 // ── PlantInstance wrapper ──
@@ -73,8 +197,6 @@ pub struct PlantInstance {
     pub position: Vec3,
     pub scale: f32,
     pub rotation: f32,
-    /// Random delay in years before this plant starts growing. The plant's
-    /// effective iteration is computed from `(scene_total_years - delay_years).max(0)`.
     pub delay_years: f32,
     pub plant: Box<dyn Plant>,
 }
@@ -123,16 +245,20 @@ impl std::fmt::Debug for PlantInstance {
 }
 
 fn create_plant(plant_type: PlantType) -> Box<dyn Plant> {
+    fn boxed<S: Species>() -> Box<dyn Plant> {
+        Box::new(PlantBase::<S>::new())
+    }
+
     match plant_type {
-        PlantType::Tree => Box::new(tree::TreePlant::new()),
-        PlantType::Bush => Box::new(bush::BushPlant::new()),
-        PlantType::Fern => Box::new(fern::FernPlant::new()),
-        PlantType::Wildflower => Box::new(wildflower::WildflowerPlant::new()),
-        PlantType::Capsella => Box::new(capsella::CapsellaPlant::new()),
-        PlantType::Mint => Box::new(mint::MintPlant::new()),
-        PlantType::Lychnis => Box::new(lychnis::LychnisPlant::new()),
-        PlantType::Mycelis => Box::new(mycelis::MycelisPlant::new()),
-        PlantType::Carrot => Box::new(carrot::CarrotPlant::new()),
+        PlantType::Tree => boxed::<tree::Tree>(),
+        PlantType::Bush => boxed::<bush::Bush>(),
+        PlantType::Fern => boxed::<fern::Fern>(),
+        PlantType::Wildflower => boxed::<wildflower::Wildflower>(),
+        PlantType::Capsella => boxed::<capsella::Capsella>(),
+        PlantType::Mint => boxed::<mint::Mint>(),
+        PlantType::Lychnis => boxed::<lychnis::Lychnis>(),
+        PlantType::Mycelis => boxed::<mycelis::Mycelis>(),
+        PlantType::Carrot => boxed::<carrot::Carrot>(),
     }
 }
 

@@ -144,7 +144,7 @@ impl State {
         self.debug_info.camera_pos = self.world.camera_position().to_array();
         self.debug_info.scene = self.world.scene_stats();
 
-        // Keep a rolling history of non-zero rebuild costs for the rebuild bar chart.
+        // Keep a rolling history of non-zero rebuild costs for the rebuild bar chart
         let rebuild_ms = self.debug_info.scene.last_rebuild_ms;
         if rebuild_ms > 0.0 {
             self.debug_info.rebuild_history.push_back(rebuild_ms);
@@ -154,7 +154,7 @@ impl State {
             }
         }
 
-        // Record one CSV row (and update rolling summary) for every rendered frame.
+        // Record one CSV row (and update rolling summary) for every rendered frame
         let scene_name = self.settings.scene.active().name.clone();
         let date = self.settings.scene.active().date;
         self.perf.record(&self.debug_info, &scene_name, date);
@@ -312,11 +312,11 @@ impl State {
                         scene.mark_dirty();
                     }
                     KeyCode::ArrowRight => {
-                        scene.date = scene.date.advance_weeks(step);
+                        scene.date.advance_weeks(step);
                         scene.mark_dirty();
                     }
                     KeyCode::ArrowLeft => {
-                        scene.date = scene.date.advance_weeks(-step);
+                        scene.date.advance_weeks(-step);
                         scene.mark_dirty();
                     }
                     _ => {}

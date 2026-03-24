@@ -7,11 +7,12 @@ use glam::{Vec3, vec3};
 use crate::{
     settings::PlantType,
     util::{
-        lsystem::{LSystem, Rule, Symbol, SymbolType},
+        lsystem::{LSystem, Rule, Symbol, SymbolType, fmt_angle},
         rng,
         turtle::Action,
+        widget,
     },
-    world::plants::{Plant, PlantEnvironment, lerp_bark_colour},
+    world::plants::{Species, lerp_bark_colour},
 };
 
 #[derive(Clone)]
@@ -55,225 +56,99 @@ impl Default for TreeParams {
     }
 }
 
-pub struct TreePlant {
-    iteration: u32,
-    dirty: bool,
-    cached_actions: Vec<Action>,
-    pub params: TreeParams,
-    last_season: f32,
-}
+pub struct Tree;
 
-impl Default for TreePlant {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+impl Species for Tree {
+    type Params = TreeParams;
 
-impl TreePlant {
-    pub fn new() -> Self {
-        let params = TreeParams::default();
-        let actions = generate(0, &params, 0.25);
-        Self {
-            iteration: 0,
-            dirty: false,
-            cached_actions: actions,
-            params,
-            last_season: 0.25,
-        }
-    }
-}
+    const TYPE: PlantType = PlantType::Tree;
 
-impl Plant for TreePlant {
-    fn plant_type(&self) -> PlantType {
-        PlantType::Tree
+    fn generate(age: u32, p: &TreeParams, season: f32, dormancy_offset: f32) -> Vec<Action> {
+        generate(age, p, season, dormancy_offset)
     }
 
-    fn iteration(&self) -> u32 {
-        self.iteration
+    fn max_iterations(p: &TreeParams) -> u32 {
+        p.max_iterations
     }
 
-    fn max_iterations(&self) -> u32 {
-        self.params.max_iterations
+    fn colour(p: &TreeParams, iteration: u32) -> Vec3 {
+        lerp_bark_colour(iteration, p.max_iterations as f32, p.young_bark, p.old_bark)
     }
 
-    fn set_iteration(&mut self, iteration: u32) {
-        if self.iteration != iteration {
-            self.iteration = iteration;
-            self.dirty = true;
-        }
-    }
-
-    fn colour(&self) -> Vec3 {
-        lerp_bark_colour(
-            self.iteration,
-            self.params.max_iterations as f32,
-            self.params.young_bark,
-            self.params.old_bark,
-        )
-    }
-
-    fn ui(&mut self, ui: &mut egui::Ui) -> bool {
+    fn ui(p: &mut TreeParams, ui: &mut egui::Ui) -> bool {
         let mut changed = false;
-        let p = &mut self.params;
 
         egui::Grid::new("tree_params")
             .num_columns(2)
             .spacing([8.0, 4.0])
             .show(ui, |ui| {
-                ui.label("Max iterations");
-                let mut a = p.max_iterations as i32;
-                if ui.add(egui::DragValue::new(&mut a).range(1..=15)).changed() {
-                    p.max_iterations = a as u32;
-                    changed = true;
-                }
-                ui.end_row();
-
-                ui.label("Branch angle");
-                if ui
-                    .add(egui::Slider::new(&mut p.branch_angle_deg, 5.0..=60.0).suffix("°"))
-                    .changed()
-                {
-                    changed = true;
-                }
-                ui.end_row();
-
-                ui.label("Angle jitter");
-                if ui
-                    .add(egui::Slider::new(&mut p.angle_jitter, 0.0..=0.5).max_decimals(3))
-                    .changed()
-                {
-                    changed = true;
-                }
-                ui.end_row();
-
-                ui.label("Init seg length");
-                if ui
-                    .add(egui::Slider::new(&mut p.f_init, 0.01..=0.15).max_decimals(3))
-                    .changed()
-                {
-                    changed = true;
-                }
-                ui.end_row();
-
-                ui.label("Seg growth rate");
-                if ui
-                    .add(egui::Slider::new(&mut p.f_growth, 1.0..=2.0).max_decimals(2))
-                    .changed()
-                {
-                    changed = true;
-                }
-                ui.end_row();
-
-                ui.label("Max seg length");
-                if ui
-                    .add(egui::Slider::new(&mut p.f_max, 0.05..=0.6).max_decimals(3))
-                    .changed()
-                {
-                    changed = true;
-                }
-                ui.end_row();
-
-                ui.label("Length jitter");
-                if ui
-                    .add(egui::Slider::new(&mut p.f_rand, 0.0..=0.1).max_decimals(3))
-                    .changed()
-                {
-                    changed = true;
-                }
-                ui.end_row();
-
-                ui.label("Radius ratio");
-                if ui
-                    .add(egui::Slider::new(&mut p.branch_radius_ratio, 0.05..=0.6).max_decimals(2))
-                    .changed()
-                {
-                    changed = true;
-                }
-                ui.end_row();
-
-                ui.label("Min branch radius");
-                if ui
-                    .add(egui::Slider::new(&mut p.min_branch_radius, 0.001..=0.05).max_decimals(4))
-                    .changed()
-                {
-                    changed = true;
-                }
-                ui.end_row();
-
-                ui.label("Leaf width");
-                changed |= ui
-                    .add(egui::Slider::new(&mut p.leaf_width, 0.01..=0.3).max_decimals(3))
-                    .changed();
-                ui.end_row();
-
-                ui.label("Leaf height");
-                changed |= ui
-                    .add(egui::Slider::new(&mut p.leaf_height, 0.01..=0.4).max_decimals(3))
-                    .changed();
-                ui.end_row();
-
-                ui.label("Shed age");
-                let mut sa = p.shed_age as i32;
-                if ui.add(egui::Slider::new(&mut sa, 1..=15)).changed() {
-                    p.shed_age = sa as u32;
-                    changed = true;
-                }
-                ui.end_row();
-
-                ui.label("Leaf colour");
-                let mut rgb = p.leaf_colour.to_array();
-                if ui.color_edit_button_rgb(&mut rgb).changed() {
-                    p.leaf_colour = Vec3::from(rgb);
-                    changed = true;
-                }
-                ui.end_row();
-
-                ui.label("Young bark");
-                let mut rgb = p.young_bark.to_array();
-                if ui.color_edit_button_rgb(&mut rgb).changed() {
-                    p.young_bark = Vec3::from(rgb);
-                    changed = true;
-                }
-                ui.end_row();
-
-                ui.label("Old bark");
-                let mut rgb = p.old_bark.to_array();
-                if ui.color_edit_button_rgb(&mut rgb).changed() {
-                    p.old_bark = Vec3::from(rgb);
-                    changed = true;
-                }
-                ui.end_row();
+                changed |= widget::row(
+                    ui,
+                    "Max iterations",
+                    egui::DragValue::new(&mut p.max_iterations).range(1..=15),
+                );
+                changed |= widget::row(
+                    ui,
+                    "Branch angle",
+                    egui::Slider::new(&mut p.branch_angle_deg, 5.0..=60.0).suffix("°"),
+                );
+                changed |= widget::row(
+                    ui,
+                    "Angle jitter",
+                    egui::Slider::new(&mut p.angle_jitter, 0.0..=0.5).max_decimals(3),
+                );
+                changed |= widget::row(
+                    ui,
+                    "Init seg length",
+                    egui::Slider::new(&mut p.f_init, 0.01..=0.15).max_decimals(3),
+                );
+                changed |= widget::row(
+                    ui,
+                    "Seg growth rate",
+                    egui::Slider::new(&mut p.f_growth, 1.0..=2.0).max_decimals(2),
+                );
+                changed |= widget::row(
+                    ui,
+                    "Max seg length",
+                    egui::Slider::new(&mut p.f_max, 0.05..=0.6).max_decimals(3),
+                );
+                changed |= widget::row(
+                    ui,
+                    "Length jitter",
+                    egui::Slider::new(&mut p.f_rand, 0.0..=0.1).max_decimals(3),
+                );
+                changed |= widget::row(
+                    ui,
+                    "Radius ratio",
+                    egui::Slider::new(&mut p.branch_radius_ratio, 0.05..=0.6).max_decimals(2),
+                );
+                changed |= widget::row(
+                    ui,
+                    "Min branch radius",
+                    egui::Slider::new(&mut p.min_branch_radius, 0.001..=0.05).max_decimals(4),
+                );
+                changed |= widget::row(
+                    ui,
+                    "Leaf width",
+                    egui::Slider::new(&mut p.leaf_width, 0.01..=0.3).max_decimals(3),
+                );
+                changed |= widget::row(
+                    ui,
+                    "Leaf height",
+                    egui::Slider::new(&mut p.leaf_height, 0.01..=0.4).max_decimals(3),
+                );
+                changed |= widget::row(ui, "Shed age", egui::Slider::new(&mut p.shed_age, 1..=15));
+                changed |= widget::colour_row(ui, "Leaf colour", &mut p.leaf_colour);
+                changed |= widget::colour_row(ui, "Young bark", &mut p.young_bark);
+                changed |= widget::colour_row(ui, "Old bark", &mut p.old_bark);
             });
 
         if ui.button("Reset").clicked() {
-            self.params = TreeParams::default();
+            *p = TreeParams::default();
             changed = true;
         }
-        if changed {
-            self.dirty = true;
-        }
+
         changed
-    }
-
-    fn clone_boxed(&self) -> Box<dyn Plant> {
-        let mut p = Self::new();
-        p.params = self.params.clone();
-        p.iteration = self.iteration;
-        p.last_season = self.last_season;
-        p.dirty = true;
-        Box::new(p)
-    }
-
-    fn actions(&mut self, env: &PlantEnvironment) -> &[Action] {
-        if (env.season - self.last_season).abs() > 0.02 {
-            self.dirty = true;
-        }
-        if self.dirty {
-            self.cached_actions = generate(self.iteration, &self.params, env.season);
-            self.last_season = env.season;
-            self.dirty = false;
-        }
-        &self.cached_actions
     }
 }
 
@@ -322,13 +197,7 @@ impl Display for Ts {
             Self::G => write!(f, "G"),
             Self::F(l, d) => write!(f, "F({l}, {d})"),
             Self::L => write!(f, "L"),
-            Self::Roll(angle) => {
-                if *angle >= 0.0 {
-                    write!(f, "/({angle})")
-                } else {
-                    write!(f, "\\({angle})")
-                }
-            }
+            Self::Roll(angle) => fmt_angle(f, '/', '\\', *angle),
             Self::Rl => write!(f, "Rl"),
             Self::Rr => write!(f, "Rr"),
             Self::Tl => write!(f, "Tl"),
@@ -343,67 +212,38 @@ impl Display for Ts {
     }
 }
 
-fn generate(age: u32, p: &TreeParams, season: f32) -> Vec<Action> {
+fn generate(age: u32, p: &TreeParams, season: f32, dormancy_offset: f32) -> Vec<Action> {
     use Ts::*;
 
-    // Deciduous leaf shedding: ramps up through autumn, peaks in winter, recovers in spring.
-    // Max shed 0.85: a few leaves persist (not completely bare).
-    const MAX_SHED: f64 = 0.85;
-    let shed_prob: f64 = if season < 0.50 {
-        0.0
-    } else if season < 0.82 {
-        let t = ((season - 0.50) / 0.32) as f64;
-        MAX_SHED * t * t * (3.0 - 2.0 * t)
-    } else if season < 0.90 {
-        MAX_SHED
-    } else {
-        let t = ((season - 0.90) / 0.10) as f64;
-        MAX_SHED * (1.0 - t * t * (3.0 - 2.0 * t))
-    };
+    // Deciduous leaf shedding: ramps up through autumn, peaks in winter, recovers
+    // in spring. Peaks at 0.85 — a few leaves persist, so the crown is never bare.
+    let shed_prob = super::dormancy_factor(season, dormancy_offset, 0.85) as f64;
 
     let bark = lerp_bark_colour(age, p.max_iterations as f32, p.young_bark, p.old_bark);
 
     // Autumn colouration: leaves turn amber-gold before shedding.
-    let autumn_leaf = glam::vec3(0.82, 0.52, 0.08);
-    let leaf_colour = if season < 0.48 {
-        p.leaf_colour
-    } else if season < 0.78 {
-        let t = (season - 0.48) / 0.30;
-        let t = t * t * (3.0 - 2.0 * t);
-        p.leaf_colour.lerp(autumn_leaf, t)
-    } else {
-        autumn_leaf
-    };
+    let leaf_colour =
+        super::autumn_colour(season, p.leaf_colour, vec3(0.82, 0.52, 0.08), 0.48, 0.78);
 
     // Spring elongation: new shoots grow faster in early spring.
-    let spring = if season < 0.08 {
-        let t = season / 0.08;
-        t * t * (3.0 - 2.0 * t)
-    } else if season < 0.18 {
-        let t = (season - 0.08) / 0.10;
-        1.0 - t * t * (3.0 - 2.0 * t)
-    } else {
-        0.0
-    };
+    let spring = super::spring_surge(season);
 
     let shedding = age >= p.shed_age;
     let branch_angle = p.branch_angle_deg.to_radians();
-    let angle_jitter = p.angle_jitter;
-    let f_init = p.f_init;
-    let f_max = p.f_max;
-    let f_rand = p.f_rand;
     let f_growth = p.f_growth * (1.0 + 0.20 * spring);
-    let d_init = f_init * p.branch_radius_ratio;
-    let d_max = f_max * p.branch_radius_ratio;
-    let min_radius = p.min_branch_radius;
+    let d_init = p.f_init * p.branch_radius_ratio;
+    let d_max = p.f_max * p.branch_radius_ratio;
 
     let green = SetColour(leaf_colour);
     let brown = SetColour(bark);
 
     let rule_f = Rule::Parametric(F(0.0, 0.0), &|s: &Ts, out: &mut Vec<Ts>| {
         if let &Ts::F(l, d) = s {
-            let r = rng::random_range(-f_rand, f_rand);
-            out.push(F((l * f_growth + r).min(f_max), (d * f_growth).min(d_max)));
+            let r = rng::random_range(-p.f_rand, p.f_rand);
+            out.push(F(
+                (l * f_growth + r).min(p.f_max),
+                (d * f_growth).min(d_max),
+            ));
             true
         } else {
             false
@@ -432,16 +272,16 @@ fn generate(age: u32, p: &TreeParams, season: f32) -> Vec<Action> {
     ));
     let rule_g = Rule::Normal(G, &rule_g_out);
 
-    let jt = Roll(rng::random_range(-angle_jitter, angle_jitter));
-    let rule_t = Rule::Normal(T, &vec![
-        F(f_init, d_init),
-        F(f_init, d_init),
-        F(f_init, d_init),
+    let jt = Roll(rng::random_range(-p.angle_jitter, p.angle_jitter));
+    let rule_t = Rule::Normal(T, &[
+        F(p.f_init, d_init),
+        F(p.f_init, d_init),
+        F(p.f_init, d_init),
         jt,
         Push,
         Rl,
         Tl,
-        F(f_init, d_init),
+        F(p.f_init, d_init),
         X,
         Push,
         Tr,
@@ -455,7 +295,7 @@ fn generate(age: u32, p: &TreeParams, season: f32) -> Vec<Action> {
         Rl,
         Rl,
         Tl,
-        F(f_init, d_init),
+        F(p.f_init, d_init),
         X,
         Push,
         Tl,
@@ -473,7 +313,7 @@ fn generate(age: u32, p: &TreeParams, season: f32) -> Vec<Action> {
         Rl,
         Rl,
         Tl,
-        F(f_init, d_init),
+        F(p.f_init, d_init),
         X,
         Push,
         Tr,
@@ -481,14 +321,14 @@ fn generate(age: u32, p: &TreeParams, season: f32) -> Vec<Action> {
         Pop,
     ]);
 
-    let jx = Roll(rng::random_range(-angle_jitter, angle_jitter));
-    let rule_x = Rule::Normal(X, &vec![
-        F(f_init, d_init),
+    let jx = Roll(rng::random_range(-p.angle_jitter, p.angle_jitter));
+    let rule_x = Rule::Normal(X, &[
+        F(p.f_init, d_init),
         jx,
         Push,
         Rl,
         Tl,
-        F(f_init, d_init),
+        F(p.f_init, d_init),
         X,
         Push,
         Tr,
@@ -502,7 +342,7 @@ fn generate(age: u32, p: &TreeParams, season: f32) -> Vec<Action> {
         Rl,
         Rl,
         Tl,
-        F(f_init, d_init),
+        F(p.f_init, d_init),
         X,
         Push,
         Tl,
@@ -520,7 +360,7 @@ fn generate(age: u32, p: &TreeParams, season: f32) -> Vec<Action> {
         Rl,
         Rl,
         Tl,
-        F(f_init, d_init),
+        F(p.f_init, d_init),
         X,
         Push,
         Tr,
@@ -536,7 +376,7 @@ fn generate(age: u32, p: &TreeParams, season: f32) -> Vec<Action> {
 
     let mut actions = vec![Action::Colour(bark)];
     actions.extend(lsystem.current().iter().map(|&s| match s {
-        F(l, d) => Action::Branch(l, d.max(min_radius)),
+        F(l, d) => Action::Branch(l, d.max(p.min_branch_radius)),
         L => Action::Leaf(leaf_width, leaf_height),
         Roll(r) => Action::Roll(r),
         Rl => Action::Roll(-branch_angle),

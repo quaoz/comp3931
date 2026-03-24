@@ -1,5 +1,4 @@
 //! Mycelis (Wall Lettuce) inspired by "The Algorithmic Beauty of Plants" fig 3.18-3.19, pg 90-91.
-//! Context-sensitive rules model acropetal flowering propagation.
 
 use std::{
     f32::consts::{FRAC_PI_6, FRAC_PI_8, PI},
@@ -11,11 +10,12 @@ use glam::{Vec3, vec3};
 use crate::{
     settings::PlantType,
     util::{
-        lsystem::{ContextAction, LSystem, Rule, Symbol, SymbolType},
+        lsystem::{ContextAction, LSystem, Rule, Symbol, SymbolType, fmt_angle},
         rng,
         turtle::Action,
+        widget,
     },
-    world::plants::{Plant, PlantEnvironment},
+    world::plants::Species,
 };
 
 #[derive(Clone)]
@@ -43,168 +43,67 @@ impl Default for MycelisParams {
     }
 }
 
-pub struct MycelisPlant {
-    iteration: u32,
-    dirty: bool,
-    cached_actions: Vec<Action>,
-    pub params: MycelisParams,
-    last_season: f32,
-    dormancy_offset: f32,
-}
+pub struct Mycelis;
 
-impl Default for MycelisPlant {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+impl Species for Mycelis {
+    type Params = MycelisParams;
 
-impl MycelisPlant {
-    pub fn new() -> Self {
-        let params = MycelisParams::default();
-        let dormancy_offset = rng::random_range(-0.05_f32, 0.05);
-        let actions = generate(0, &params, 0.25, dormancy_offset);
-        Self {
-            iteration: 0,
-            dirty: false,
-            cached_actions: actions,
-            params,
-            last_season: 0.25,
-            dormancy_offset,
-        }
-    }
-}
+    const TYPE: PlantType = PlantType::Mycelis;
 
-impl Plant for MycelisPlant {
-    fn plant_type(&self) -> PlantType {
-        PlantType::Mycelis
+    fn generate(age: u32, p: &MycelisParams, season: f32, dormancy_offset: f32) -> Vec<Action> {
+        generate(age, p, season, dormancy_offset)
     }
 
-    fn iteration(&self) -> u32 {
-        self.iteration
+    fn max_iterations(p: &MycelisParams) -> u32 {
+        p.max_iterations
     }
 
-    fn max_iterations(&self) -> u32 {
-        self.params.max_iterations
+    fn colour(p: &MycelisParams, _iteration: u32) -> Vec3 {
+        p.stem_colour
     }
 
-    fn set_iteration(&mut self, iteration: u32) {
-        if self.iteration != iteration {
-            self.iteration = iteration;
-            self.dirty = true;
-        }
-    }
-
-    fn colour(&self) -> Vec3 {
-        self.params.stem_colour
-    }
-
-    fn ui(&mut self, ui: &mut egui::Ui) -> bool {
+    fn ui(p: &mut MycelisParams, ui: &mut egui::Ui) -> bool {
         let mut changed = false;
-        let p = &mut self.params;
 
         egui::Grid::new("mycelis_params")
             .num_columns(2)
             .spacing([8.0, 4.0])
             .show(ui, |ui| {
-                ui.label("Max iterations");
-                let mut a = p.max_iterations as i32;
-                if ui
-                    .add(egui::DragValue::new(&mut a).range(1..=100))
-                    .changed()
-                {
-                    p.max_iterations = a as u32;
-                    changed = true;
-                }
-                ui.end_row();
-
-                ui.label("Branch angle");
-                if ui
-                    .add(egui::Slider::new(&mut p.branch_angle_deg, 5.0..=60.0).suffix("°"))
-                    .changed()
-                {
-                    changed = true;
-                }
-                ui.end_row();
-
-                ui.label("Internode length");
-                if ui
-                    .add(egui::Slider::new(&mut p.i_init, 0.02..=0.3).max_decimals(3))
-                    .changed()
-                {
-                    changed = true;
-                }
-                ui.end_row();
-
-                ui.label("Branch radius");
-                if ui
-                    .add(egui::Slider::new(&mut p.branch_radius, 0.001..=0.03).max_decimals(4))
-                    .changed()
-                {
-                    changed = true;
-                }
-                ui.end_row();
-
-                ui.label("Flower size");
-                if ui
-                    .add(egui::Slider::new(&mut p.flower_size, 0.005..=0.12).max_decimals(3))
-                    .changed()
-                {
-                    changed = true;
-                }
-                ui.end_row();
-
-                ui.label("Stem colour");
-                let mut rgb = p.stem_colour.to_array();
-                if ui.color_edit_button_rgb(&mut rgb).changed() {
-                    p.stem_colour = Vec3::from(rgb);
-                    changed = true;
-                }
-                ui.end_row();
-
-                ui.label("Flower colour");
-                let mut rgb = p.flower_colour.to_array();
-                if ui.color_edit_button_rgb(&mut rgb).changed() {
-                    p.flower_colour = Vec3::from(rgb);
-                    changed = true;
-                }
-                ui.end_row();
+                changed |= widget::row(
+                    ui,
+                    "Max iterations",
+                    egui::DragValue::new(&mut p.max_iterations).range(1..=100),
+                );
+                changed |= widget::row(
+                    ui,
+                    "Branch angle",
+                    egui::Slider::new(&mut p.branch_angle_deg, 5.0..=60.0).suffix("\u{b0}"),
+                );
+                changed |= widget::row(
+                    ui,
+                    "Internode length",
+                    egui::Slider::new(&mut p.i_init, 0.02..=0.3).max_decimals(3),
+                );
+                changed |= widget::row(
+                    ui,
+                    "Branch radius",
+                    egui::Slider::new(&mut p.branch_radius, 0.001..=0.03).max_decimals(4),
+                );
+                changed |= widget::row(
+                    ui,
+                    "Flower size",
+                    egui::Slider::new(&mut p.flower_size, 0.005..=0.12).max_decimals(3),
+                );
+                changed |= widget::colour_row(ui, "Stem colour", &mut p.stem_colour);
+                changed |= widget::colour_row(ui, "Flower colour", &mut p.flower_colour);
             });
 
         if ui.button("Reset").clicked() {
-            self.params = MycelisParams::default();
+            *p = MycelisParams::default();
             changed = true;
         }
-        if changed {
-            self.dirty = true;
-        }
+
         changed
-    }
-
-    fn clone_boxed(&self) -> Box<dyn Plant> {
-        let mut p = Self::new();
-        p.params = self.params.clone();
-        p.iteration = self.iteration;
-        p.last_season = self.last_season;
-        p.dormancy_offset = self.dormancy_offset;
-        p.dirty = true;
-        Box::new(p)
-    }
-
-    fn actions(&mut self, env: &PlantEnvironment) -> &[Action] {
-        if (env.season - self.last_season).abs() > 0.02 {
-            self.dirty = true;
-        }
-        if self.dirty {
-            self.cached_actions = generate(
-                self.iteration,
-                &self.params,
-                env.season,
-                self.dormancy_offset,
-            );
-            self.last_season = env.season;
-            self.dirty = false;
-        }
-        &self.cached_actions
     }
 }
 
@@ -268,20 +167,8 @@ impl Display for Mys {
             Self::W => write!(f, "W"),
             Self::F => write!(f, "F"),
             Self::Leaf => write!(f, "L"),
-            Self::Turn(angle) => {
-                if *angle >= 0.0 {
-                    write!(f, "+({angle})")
-                } else {
-                    write!(f, "-({})", angle.abs())
-                }
-            }
-            Self::Roll(angle) => {
-                if *angle >= 0.0 {
-                    write!(f, "/({angle})")
-                } else {
-                    write!(f, "\\({})", angle.abs())
-                }
-            }
+            Self::Turn(angle) => fmt_angle(f, '+', '-', *angle),
+            Self::Roll(angle) => fmt_angle(f, '/', '\\', *angle),
             Self::Colour(c) => write!(f, "C({})", c),
             Self::Push => write!(f, "["),
             Self::Pop => write!(f, "]"),
