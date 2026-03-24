@@ -8,7 +8,7 @@ use crate::{
     settings::PlantType,
     util::{
         lsystem::{LSystem, Rule, Symbol, SymbolType, fmt_angle},
-        rng::{self, random_range},
+        rng::random_range,
         turtle::Action,
         widget,
     },
@@ -195,7 +195,7 @@ fn generate(age: u32, p: &BushParams, season: f32, dormancy_offset: f32) -> Vec<
     let green = SetColour(leaf_colour);
     let brown = SetColour(bark);
 
-    let leaf = move |orients: &[Bs]| -> Vec<Bs> {
+    let _leaf = move |orients: &[Bs]| -> Vec<Bs> {
         let mut v = vec![green, Push];
         v.extend_from_slice(orients);
         v.push(L);

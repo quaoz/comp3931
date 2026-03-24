@@ -11,6 +11,11 @@
       inputs.nixpkgs.follows = "nixpkgs";
     };
 
+    treefmt-nix = {
+      url = "github:numtide/treefmt-nix";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+
     advisory-db = {
       url = "github:rustsec/advisory-db";
       flake = false;
@@ -38,7 +43,7 @@
               latest.rust-std
               latest.rustc
               latest.rustfmt
-            ]).overrideAttrs (final: prev: {
+            ]).overrideAttrs (_: prev: {
             # WATCH: https://github.com/nix-community/fenix/issues/155
             buildCommand =
               prev.buildCommand
@@ -68,13 +73,37 @@
           };
 
           cargoArtifacts = craneLib.buildDepsOnly commonArgs;
+
+          treefmt = inputs.treefmt-nix.lib.evalModule pkgs {
+            projectRootFile = "flake.nix";
+
+            settings.global.excludes = [
+              "/assets/textures/*"
+              "/flake.lock"
+              "/LICENSE"
+            ];
+
+            programs = {
+              # nix
+              alejandra.enable = true;
+              deadnix.enable = true;
+              statix.enable = true;
+
+              # project
+              rustfmt = {
+                enable = true;
+                package = toolchain;
+              };
+              taplo.enable = true;
+              wgslfmt.enable = true;
+            };
+          };
         in
-          function {inherit system pkgs craneLib commonArgs cargoArtifacts;}
+          function {inherit system pkgs craneLib commonArgs cargoArtifacts treefmt;}
       );
   in {
     packages = forAllSystems ({
       pkgs,
-      system,
       craneLib,
       commonArgs,
       cargoArtifacts,
@@ -117,22 +146,29 @@
 
     devShells = forAllSystems ({
       system,
+      treefmt,
       craneLib,
       ...
     }: {
       default = craneLib.devShell {
+        packages = builtins.attrValues treefmt.config.build.programs ++ [self.formatter.${system}];
         checks = self.checks.${system};
       };
     });
 
+    formatter = forAllSystems ({treefmt, ...}: treefmt.config.build.wrapper);
+
     checks = forAllSystems ({
       system,
+      treefmt,
       craneLib,
       commonArgs,
       cargoArtifacts,
       ...
     }: {
       inherit (self.packages.${system}) default;
+
+      formatting = treefmt.config.build.check self;
 
       cargo-audit = craneLib.cargoAudit {
         inherit (inputs) advisory-db;

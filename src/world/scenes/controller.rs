@@ -369,7 +369,6 @@ impl SceneController {
         full_rebuild: bool,
         scene_seed: u64,
     ) {
-        let n = scene.plants.len();
         if full_rebuild {
             self.plant_caches.clear();
         }
@@ -396,7 +395,7 @@ impl SceneController {
 
             // Age plant
             let age_years = (config.date.total_years() - plant.delay_years).max(0.0);
-            let effective_iter = (age_years / plant.plant.plant_type().years_per_iteration());
+            let effective_iter = age_years / plant.plant.plant_type().years_per_iteration();
             plant
                 .plant
                 .set_iteration((effective_iter as u32).min(plant.plant.max_iterations()));

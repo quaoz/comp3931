@@ -186,8 +186,7 @@ fn generate(age: u32, p: &FernParams, season: f32, dormancy_offset: f32) -> Vec<
     // Leaf branch: branching leaves (age in [3,7], dist <= 9, depth <= 2).
     let rule_a_leaf_branch = Rule::Parametric(Leaf(0, 0, 0), &move |s: &Fs, out: &mut Vec<Fs>| {
         if let &Fs::Leaf(age, dist, depth) = s
-            && age >= 3
-            && age <= LEAF_MAX_AGE
+            && (3..=LEAF_MAX_AGE).contains(&age)
             && dist <= LEAF_MAX_DIST
             && depth <= 2
         {
