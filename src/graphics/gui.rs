@@ -8,7 +8,7 @@ use egui_wgpu::{
 use winit::{event::WindowEvent, window::Window};
 
 use crate::{
-    perf::PerfLogger,
+    perf::{PerfLogger, RebuildBreakdown},
     settings::{EcosystemKernel, EnvironmentSettings, PlantType, SceneData, Settings},
     util::widget,
     world::{CameraInfo, plants::PlantInstance, scenes::SceneStats},
@@ -1041,6 +1041,42 @@ fn mini_bar_graph(
     }
 }
 
+/// Per-stage rebuild timings
+fn phase_breakdown_ui(ui: &mut egui::Ui, breakdown: &RebuildBreakdown) {
+    let total = breakdown.total_ms();
+    if total <= 0.0 {
+        return;
+    }
+
+    Grid::new("rebuild_phase_grid")
+        .num_columns(3)
+        .spacing([6.0, 1.0])
+        .show(ui, |ui| {
+            for (name, ms) in breakdown.phases() {
+                let share = ms / total;
+                ui.label(egui::RichText::new(name).small());
+                ui.label(egui::RichText::new(format!("{ms:.1} ms")).small());
+                // A share bar makes the dominant stage readable at a glance.
+                let (response, painter) =
+                    ui.allocate_painter(egui::Vec2::new(60.0, 8.0), egui::Sense::hover());
+                painter.rect_filled(response.rect, 1.0, egui::Color32::from_black_alpha(120));
+                let filled = egui::Rect::from_min_size(
+                    response.rect.min,
+                    egui::Vec2::new(response.rect.width() * share, response.rect.height()),
+                );
+                painter.rect_filled(filled, 1.0, egui::Color32::from_rgb(120, 180, 240));
+                ui.end_row();
+            }
+        });
+
+    // Partial rebuilds only touch a few plants, the per-plant stages shrink with it but `combine` doesn't
+    ui.label(
+        egui::RichText::new(format!("{} plants rebuilt", breakdown.plants_built))
+            .small()
+            .weak(),
+    );
+}
+
 fn debug_ui(ctx: &Context, debug: &DebugInfo, perf: &mut PerfLogger) {
     egui::Window::new("Debug")
         .collapsible(false)
@@ -1122,6 +1158,7 @@ fn debug_ui(ctx: &Context, debug: &DebugInfo, perf: &mut PerfLogger) {
                     "Build: {:.1} ms ({})",
                     debug.scene.last_rebuild_ms, kind
                 ));
+                phase_breakdown_ui(ui, &debug.scene.breakdown);
             } else {
                 ui.label("Build: cached");
             }
@@ -1178,6 +1215,13 @@ fn debug_ui(ctx: &Context, debug: &DebugInfo, perf: &mut PerfLogger) {
                         s.rebuild_count,
                         s.mean_rebuild_ms(),
                     ));
+                    let mean = s.mean_breakdown();
+                    let (name, share) = mean.dominant();
+                    ui.label(
+                        egui::RichText::new(format!("dominated by {name} ({:.0}%)", share * 100.0))
+                            .small(),
+                    );
+                    phase_breakdown_ui(ui, &mean);
                 }
                 if let Some(f) = &perf.current_file {
                     ui.label(egui::RichText::new(f.as_str()).small().weak());

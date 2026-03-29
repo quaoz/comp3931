@@ -9,6 +9,7 @@ use wgpu::{Buffer, Queue};
 
 use super::lod::{Frustum, LodTier, PlantCache, SceneStats, plant_lod_tier};
 use crate::{
+    perf::RebuildBreakdown,
     settings::{CullSettings, EnvironmentSettings, LodSettings, SceneSettings, WorldDate},
     util::{
         rng,
@@ -263,7 +264,7 @@ impl SceneController {
 
         let config = TurtleConfig::from_env_scene(env, scene.global_scale, scene.date);
         let scene_seed = scene.seed;
-        self.build_plant_caches(
+        let mut breakdown = self.build_plant_caches(
             scene,
             &config,
             &desired_tiers,
@@ -276,8 +277,8 @@ impl SceneController {
         self.last_scene_gen = scene.generation;
         self.last_env_gen = env.generation;
 
-        let (overflow, fill) = self.assemble_and_upload(frame, lod);
-        self.update_stats(build_start, full_rebuild, lod);
+        let (overflow, fill) = self.assemble_and_upload(frame, lod, &mut breakdown);
+        self.update_stats(build_start, full_rebuild, lod, breakdown);
 
         if overflow {
             // Geometry exceeded GPU buffer, tighten culling for next frame
@@ -368,13 +369,13 @@ impl SceneController {
         lod: &LodSettings,
         full_rebuild: bool,
         scene_seed: u64,
-    ) {
+    ) -> RebuildBreakdown {
+        let mut turtle = Turtle::new(Vec3::ZERO, Vec3::ZERO);
+        let mut breakdown = RebuildBreakdown::default();
+
         if full_rebuild {
             self.plant_caches.clear();
         }
-
-        let mut turtle = Turtle::new(Vec3::ZERO, Vec3::ZERO);
-        turtle.clear_occupancy();
 
         for (i, plant) in scene.plants.iter_mut().enumerate() {
             if !full_rebuild && desired_tiers[i] == self.plant_caches[i].requested_tier {
@@ -420,22 +421,44 @@ impl SceneController {
             turtle.set_leaf_skip_prob(desired_tiers[i].leaf_skip(lod));
             turtle.do_actions(plant.plant.actions(&env));
 
+            turtle.set_lod(lod_segments, lod_min_radius);
+            turtle.set_leaf_skip_prob(desired_tiers[i].leaf_skip(lod));
+
+            let phase = Instant::now();
+            let actions = plant.plant.actions(&env);
+            breakdown.generate_ms += elapsed_ms(phase);
+
+            let phase = Instant::now();
+            turtle.do_actions(actions);
+            breakdown.turtle_ms += elapsed_ms(phase);
+
+            let phase = Instant::now();
             let cache = PlantCache {
                 tier: desired_tiers[i],
                 requested_tier: desired_tiers[i],
                 line_geo: turtle.line_geometry(),
                 mesh_geo: turtle.take_mesh_geometry(),
             };
+            breakdown.extract_ms += elapsed_ms(phase);
+            breakdown.plants_built += 1;
+
             if full_rebuild {
                 self.plant_caches.push(cache);
             } else {
                 self.plant_caches[i] = cache;
             }
         }
+
+        breakdown
     }
 
     /// Upload combined plant geometries, ground and debug circles to the GPU. Returns `(overflow, fill)` where `overflow` is true when any buffer would exceed `MAX_VERTS` and `fill` is the fraction of MAX_VERTS used by the largest buffer.
-    fn assemble_and_upload(&mut self, frame: &FrameParams, lod: &LodSettings) -> (bool, f32) {
+    fn assemble_and_upload(
+        &mut self,
+        frame: &FrameParams,
+        lod: &LodSettings,
+        breakdown: &mut RebuildBreakdown,
+    ) -> (bool, f32) {
         let mut line_geo_refs: Vec<&LineGeometry> =
             self.plant_caches.iter().map(|c| &c.line_geo).collect();
         let mut mesh_geo_refs: Vec<&MeshGeometry> =
@@ -463,11 +486,14 @@ impl SceneController {
         let ground = &self.cached_ground.as_ref().unwrap().1;
         mesh_geo_refs.push(ground);
 
+        let phase = Instant::now();
         let combined_lines = combine_line_geometries(&line_geo_refs);
         let combined_mesh = combine_mesh_geometries(&mesh_geo_refs);
+        breakdown.combine_ms = elapsed_ms(phase);
 
-        // Only write and update CPU state when geometry fits in the allocated buffers.
-        // If it doesn't fit, the previous frame's buffer contents and draw counts remain.
+        let upload_start = Instant::now();
+
+        // Only update state when geometry fits in the buffers
         if !combined_lines.vertices.is_empty()
             && combined_lines.vertices.len() <= MAX_VERTS
             && combined_lines.indices.len() <= MAX_VERTS
@@ -533,9 +559,8 @@ impl SceneController {
 
             self.mesh_index_count = combined_mesh.indices.len() as u32;
         }
+        breakdown.upload_ms = elapsed_ms(upload_start);
 
-        // Store line vertex count for stats (use combined_lines even if write was skipped —
-        // the stat is informational and the previously-written count is preserved).
         self.stats.line_vertex_count = combined_lines.vertices.len() as u32;
 
         let fill = [
@@ -552,7 +577,13 @@ impl SceneController {
     }
 
     /// Updates `self.stats` from the current plant cache state.
-    fn update_stats(&mut self, build_start: Instant, full_rebuild: bool, lod: &LodSettings) {
+    fn update_stats(
+        &mut self,
+        build_start: Instant,
+        full_rebuild: bool,
+        lod: &LodSettings,
+        breakdown: RebuildBreakdown,
+    ) {
         let mut lod_tier_counts = [0usize; 4];
         let mut culled_count = 0usize;
 
@@ -570,6 +601,7 @@ impl SceneController {
             lod_tier_counts,
             last_rebuild_ms: elapsed_ms(build_start),
             last_rebuild_full: full_rebuild,
+            breakdown,
             line_vertex_count: self.stats.line_vertex_count,
             lod_pressure: self.lod_pressure,
             lod_thresholds: [lod.near_threshold, lod.mid_threshold, lod.far_threshold],

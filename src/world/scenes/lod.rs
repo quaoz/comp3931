@@ -1,6 +1,7 @@
 use glam::{Mat4, Vec3, Vec4};
 
 use crate::{
+    perf::RebuildBreakdown,
     settings::{CullSettings, LodSettings},
     util::turtle::{LineGeometry, MeshGeometry},
 };
@@ -193,6 +194,8 @@ pub struct SceneStats {
     pub last_rebuild_ms: f32,
     /// Whether the last rebuild was a full rebuild or a partial (tier-only) update.
     pub last_rebuild_full: bool,
+    /// Where the time in `last_rebuild_ms` was spent.
+    pub breakdown: RebuildBreakdown,
     pub line_vertex_count: u32,
     /// Active LOD pressure multiplier (1.0 = normal; < 1.0 = geometry budget exceeded).
     pub lod_pressure: f32,
@@ -208,6 +211,7 @@ impl Default for SceneStats {
             lod_tier_counts: [0; 4],
             last_rebuild_ms: 0.0,
             last_rebuild_full: false,
+            breakdown: RebuildBreakdown::default(),
             line_vertex_count: 0,
             lod_pressure: 1.0,
             lod_thresholds: [80.0, 160.0, 300.0],
