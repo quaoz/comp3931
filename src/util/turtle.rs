@@ -163,6 +163,8 @@ impl Turtle {
         self.occupancy_grid.extend(self.current_plant_marks.drain());
 
         // Reset reusing previous allocations
+        self.heading = Vec3::X;
+        self.normal = Vec3::Y;
         self.stack.clear();
         self.path_buf.clear();
         self.colour_buf.clear();
@@ -410,7 +412,7 @@ impl Turtle {
 
     /// Generate a double-sided leaf quad at the current position
     pub fn leaf(&mut self, width: f32, height: f32) {
-        if self.leaf_skip_prob > 0.0 && rng::random_range(0.0f32, 1.0) < self.leaf_skip_prob {
+        if self.leaf_skip_prob > 0.0 && rng::random_range(0f32, 1.0) < self.leaf_skip_prob {
             return;
         }
 
