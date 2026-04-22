@@ -404,7 +404,7 @@ impl SceneController {
                 season: config.date.season(),
             };
 
-            rng::seed(scene_seed.wrapping_add(i as u64 * 6364136223846793005u64));
+            rng::seed(scene_seed.wrapping_add((i as u64).wrapping_mul(6364136223846793005u64)));
 
             let (lod_segments, lod_min_radius) = desired_tiers[i].geometry_params();
             config.apply(
