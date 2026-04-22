@@ -1036,7 +1036,7 @@ fn mini_bar_graph(
                 egui::pos2(response.rect.left(), y),
                 egui::pos2(response.rect.right(), y),
             ],
-            egui::Stroke::new(1.0, egui::Color32::from_gray(180)),
+            egui::Stroke::new(1f32, egui::Color32::from_gray(180)),
         );
     }
 }
@@ -1167,7 +1167,7 @@ fn debug_ui(ctx: &Context, debug: &DebugInfo, perf: &mut PerfLogger) {
                     .rebuild_history
                     .iter()
                     .cloned()
-                    .fold(0.0_f32, f32::max)
+                    .fold(0f32, f32::max)
                     .max(10.0);
                 mini_bar_graph(
                     ui,
