@@ -1,5 +1,6 @@
 use std::{sync::Arc, time::Instant};
 
+use pollster::FutureExt;
 use winit::{
     application::ApplicationHandler,
     event::{DeviceEvent, DeviceId, WindowEvent},
@@ -32,6 +33,10 @@ impl App {
 
 impl ApplicationHandler<AppEvent> for App {
     fn resumed(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
+        if self.state.is_some() {
+            return;
+        }
+
         let window_attrs = Window::default_attributes();
         let window = Arc::new(
             event_loop
@@ -39,17 +44,14 @@ impl ApplicationHandler<AppEvent> for App {
                 .expect("Failed to create window"),
         );
 
-        let proxy = self.proxy.clone();
-        std::thread::spawn(move || {
-            pollster::block_on(async move {
-                let state = State::new(window).await?;
-                proxy
-                    .send_event(AppEvent::Start(state))
-                    .ok()
-                    .expect("Failed to send start event");
-                anyhow::Ok(())
-            })
-        });
+        let state = State::new(window)
+            .block_on()
+            .expect("Failed to create state");
+
+        self.proxy
+            .send_event(AppEvent::Start(state))
+            .ok()
+            .expect("Failed to send start event");
     }
 
     fn user_event(&mut self, _event_loop: &winit::event_loop::ActiveEventLoop, event: AppEvent) {
