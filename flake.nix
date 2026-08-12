@@ -137,12 +137,10 @@
           treefmt = inputs.treefmt-nix.lib.evalModule pkgs {
             projectRootFile = "flake.nix";
 
-            settings.global.excludes = [
-              "/assets/textures/*"
-              "/report/**/*.pdf_tex"
-              "/report/refs.bib"
-              "/flake.lock"
-              "/LICENSE"
+            settings.excludes = [
+              "assets/textures/*"
+              "report/*.pdf_tex"
+              "report/refs.bib"
             ];
 
             programs = {
@@ -184,10 +182,10 @@
           vulkan-loader
           libGL
           wayland
-          xorg.libX11
-          xorg.libXi
-          xorg.libXtst
-          xorg.libXcursor
+          libX11
+          libXi
+          libXtst
+          libXcursor
         ];
 
       package = craneLib.buildPackage (commonArgs
