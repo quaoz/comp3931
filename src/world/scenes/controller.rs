@@ -80,7 +80,7 @@ fn ground_geometry(colour: Vec3) -> MeshGeometry {
         normals: vec![Vec3::Y; 4],
         colours: vec![colour; 4],
         indices: vec![0, 2, 1, 1, 2, 3],
-        uvs: vec![[-1.0f32, -1.0]; 4],
+        uvs: vec![[-1f32, -1.0]; 4],
         tangents: vec![Vec3::ZERO; 4],
         vertices,
     }
@@ -546,7 +546,7 @@ impl SceneController {
         ]
         .into_iter()
         .map(|n| n as f32 / MAX_VERTS as f32)
-        .fold(0.0f32, f32::max);
+        .fold(0f32, f32::max);
 
         (fill > 1.0, fill)
     }

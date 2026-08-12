@@ -79,16 +79,13 @@
             (pkgs.formats.toml {}).generate "typos.toml" {
               default = {
                 locale = "en-gb";
-                extend-words = gen ["lod"];
+                extend-words = gen [
+                  "normalize"
+                  "lod"
+                ];
               };
 
               type = let
-                toml = [
-                  # rustfmt
-                  "normalize_doc_attributes"
-                  "normalize_comments"
-                ];
-
                 rust = [
                   # wgpu
                   "initialize_adapter_from_env_or_default"
@@ -101,34 +98,27 @@
                   "color_edit_button_rgb"
                   "colored_label"
                   "Color32"
-                  # glam
-                  "normalise_and_length"
-                  "normalize_or_zero"
-                  "normalize_or"
-                  "normalize"
                   # tests
                   "ABD"
                   "BA"
                 ];
               in {
                 tex.extend-ignore-re = [
-                  "^[[:space:]]*text centered[[:space:]]*$"
-                  "[[:punct:]](begin|end)[[:punct:]](centre|itemize)[[:punct:]]"
-                  "[[:punct:]]cite[[:punct:]][[:word:]]+(,[[:word:]]+)+[[:punct:]]"
+                  "\\s*text centered\\s*"
+                  "\\\\(begin|end)\\{(center|itemize)\\}"
+                  "\\\\cite\\{\\w+(,\\w+)*\\}"
                 ];
 
-                toml.extend-identifiers = gen toml;
                 rust.extend-identifiers = gen rust;
 
                 nix.extend-identifiers = gen (builtins.concatLists [
                   [
-                    "cargoArtifacts"
                     "analyzer"
+                    "cargoArtifacts"
+                    "center"
                     "centered"
                     "itemize"
-                    "centre"
                   ]
-                  toml
                   rust
                 ]);
               };
@@ -160,7 +150,7 @@
               # report
               texfmt.enable = true;
               typos = {
-                enable = false;
+                enable = true;
                 configFile = typosConfig.outPath;
               };
             };

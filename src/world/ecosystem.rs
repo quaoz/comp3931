@@ -243,7 +243,7 @@ pub fn generate_ecosystem_plants(settings: &EcosystemSettings, seed: u64) -> Vec
 
     // Build a normalised cumulative weight table for species selection
     let total_weight: f32 = settings.species.iter().map(|(_, w)| w).sum();
-    let mut cum = 0.0_f32;
+    let mut cum = 0f32;
     let cumulative: Vec<(PlantType, f32)> = settings
         .species
         .iter()

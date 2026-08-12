@@ -200,7 +200,7 @@ fn generate(age: u32, p: &WildflowerParams, season: f32, dormancy_offset: f32) -
         vec![]
     };
 
-    let rule_p = Rule::Normal(P, &[Push, A(rng::random_range(0.0, 10.0f32)), Pop]);
+    let rule_p = Rule::Normal(P, &[Push, A(rng::random_range(0.0, 10f32)), Pop]);
 
     let rule_a = Rule::Parametric(A(0.0), &move |s: &Wf, out: &mut Vec<Wf>| {
         if let &Wf::A(a) = s {

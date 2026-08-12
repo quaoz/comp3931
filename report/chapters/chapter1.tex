@@ -7,7 +7,7 @@
 \subsection{Motivation}
 
 Interactive rendering of vegetation is an important element of video games, simulations and architectural
-visualizations. The complexity and variation of natural ecosystems poses a significant challenge as no two
+visualisations. The complexity and variation of natural ecosystems poses a significant challenge as no two
 plants are the same and real environments contain hundreds or thousands of individual plants. Traditional
 approaches require plants to be manually created through the use of 3D modelling software or constructed
 using real world data. These solutions are costly, time-consuming, and typically incapable of responding to
@@ -18,8 +18,8 @@ Procedural generation is widely used in computer graphics for a number of applic
 plants, terrain and, cities~\cite{freiknechtSurveyProceduralGeneration2017,zhangSurveyProceduralContent2022}.
 The primary methods for procedurally generating plant life are genetic
 algorithms~\cite{haubenwallnerShapeGeneticsUsingGenetic2017}, space
-colonization~\cite{runionsModelingTreesSpace,ratulApplicabilitySpaceColonization2019} and Lindenmayer systems
-(L-Systems). Genetic algorithms and space colonization function by generating branches to fill a predefined
+colonisation~\cite{runionsModelingTreesSpace,ratulApplicabilitySpaceColonization2019} and Lindenmayer systems
+(L-Systems). Genetic algorithms and space colonisation function by generating branches to fill a predefined
 space and are best suited to modelling large, mature trees and struggle to model smaller plants.
 
 \medskip
@@ -96,7 +96,7 @@ distribution. The following example models a symbol that terminates or persists 
   p_1 \quad &: A \xrightarrow{0.5} B \\
   p_2 \quad &: A \xrightarrow{0.5} A
 \end{align*}
-Stochastic rules introduce natural variation into plant models: different realizations of the same grammar
+Stochastic rules introduce natural variation into plant models: different realisations of the same grammar
 produce structurally distinct plants of the same species, capturing the individual variation observed in nature.
 
 \subsubsection{Context-Sensitive L-Systems}
@@ -183,10 +183,10 @@ such as the acropetal propagation of flowering in an inflorescence~\cite{prusink
 Plant growth is influenced by a wide range of environmental factors including: gravity (gravitropism), light
 direction (phototropism), mechanical stimuli (thigmotropism), wind loading, water availability, and seasonal
 temperature cycles. Accurate simulation of all these mechanisms for a specific species requires detailed
-parameterization from field data and is primarily the domain of botanical modelling. For many real-time
+parameterisation from field data and is primarily the domain of botanical modelling. For many real-time
 applications, such as video games and simulations, fully capturing these complex biological processes is
 unnecessary. The primary focus in these domains is for vegetation to be responsive to observable
-environmental changes in an intuitive way; this prioritizes features such as seasonal response and tropism
+environmental changes in an intuitive way; this prioritises features such as seasonal response and tropism
 over biological accuracy.
 
 \medskip
@@ -219,7 +219,7 @@ effects, without requiring a full ecological simulation.
 
 \medskip
 Lane and Prusinkiewicz describe two classes of models for spatial distribution: local-to-global models, which
-focus on individual interactions between plants, and global-to-local models, which utilize a distribution of
+focus on individual interactions between plants, and global-to-local models, which utilise a distribution of
 plant densities to determine individual positions~\cite{laneGeneratingSpatialDistributions2002}. The primary
 features of local-to-global models are self-thinning and succession. Self-thinning occurs between similar
 plants and describes the competition between plants for resources, with smaller or weaker plants being
@@ -243,13 +243,13 @@ parameter adjustment.
 \subsection{Objectives}
 
 \begin{enumerate}
-  \item \textbf{Implement a robust L-System interpreter} utilizing turtle graphics to produce geometric
+  \item \textbf{Implement a robust L-System interpreter} utilising turtle graphics to produce geometric
     structures, supporting deterministic, stochastic, parametric and context-sensitive grammar types.
   \item \textbf{Develop L-System grammars for at least three distinct plant types}, with grammars chosen to
     demonstrate different grammar classes and botanical features.
   \item \textbf{Integrate environmental response mechanisms} into the modelling system, allowing plant
     structures to respond to simulated light direction, gravity, wind, and seasonal growth cycles.
-  \item \textbf{Implement an interactive 3D visualization} supporting real-time parameter adjustment and 3D
+  \item \textbf{Implement an interactive 3D visualisation} supporting real-time parameter adjustment and 3D
     mesh generation with level-of-detail management.
 \end{enumerate}
 
