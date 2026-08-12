@@ -1,0 +1,801 @@
+\begin{appendices}
+
+% ──────────────────────────────────────────────────────────────────────────────────────────────────────────
+\chapter{Self-Appraisal}
+\label{app:selfappraisal}
+
+% ──────────────────────────────────────────────────────────────────────────────────────────────────────────
+\section{Critical Self-Evaluation}
+
+All four project objectives were met. The L-system interpreter supports all seven grammar variants; eight
+distinct plant grammars are implemented; environmental response covers phototropism, gravitropism, wind, and
+seasons; and the interactive visualization maintains interactive frame rates across all scenes. The ecosystem
+placement system, which was not in the original objectives, was added as an extension and represents the most
+technically novel contribution of the project.
+
+\medskip
+The most rigorously validated component is the L-system interpreter. The unit test suite covers all rule
+classes, including edge cases for context-sensitive priority ordering and stochastic probability boundaries,
+providing high confidence in the correctness of the rewriting engine. By contrast, the plant grammars
+themselves were validated only visually: while the grammars for \textit{Capsella}, \textit{Lychnis}, and
+\textit{Mycelis} closely match the figures in \textit{The Algorithmic Beauty of
+Plants}~\cite{prusinkiewiczAlgorithmicBeautyPlants1990}, no quantitative comparison of branch angles or
+internode lengths against measured botanical data was performed. This limits the claim of biological accuracy
+to visual plausibility.
+
+\medskip
+The environmental response system achieves the stated objectives of interactive, per-species seasonal
+behaviour, but is simplified relative to biological reality. Tropism is applied as a post-processing
+deflection of the turtle frame rather than as feedback into the rewriting process, meaning individual branches
+cannot respond to local light conditions. Season-driven dormancy is encoded as a simple age-scaling function
+rather than being derived from accumulated temperature or photoperiod, which would be more biologically
+accurate but significantly more complex to implement. These simplifications were deliberate design choices
+given the time constraints and complexity of real world ecosystems however further development would allow
+improved realism and the ability to visualize more complex interactions.
+
+\medskip
+The rendering pipeline fulfils the interactive frame rate requirement but lacks features that would improve
+visual realism: specifically, shadow casting, antialiasing, and support for more textures and more varied
+meshes. Both were identified early as lower-priority concerns relative to botanical correctness and
+ecological placement, and deferred accordingly. Their absence is the most visible gap between the project's
+output and commercial-quality vegetation renderers.
+
+% ──────────────────────────────────────────────────────────────────────────────────────────────────────────
+\section{Personal Reflection and Lessons Learned}
+
+The most significant management challenge was scope creep. The original four objectives described an L-system
+interpreter, a minimum of three plant grammars, environmental response, and interactive visualization. All of those
+objectives excluding the interpreter expanded beyond the initial estimate: eight grammars were developed
+going far beyond the required three, environmental response grew from phototropism, gravitrophism and space
+constraints to include a full seasonal cycle with per-species phenology, and adaptive LOD and frustum culling
+were implemented to permit the visualization of more complex scenes. Beyond the core objectives, the
+ecosystem placement system and the performance logger were also unplanned additions. Individually, each
+addition was small and improved the project in a clear and immediately understandable way; collectively they
+consumed a substantial fraction of available development time.
+
+\medskip
+The lesson is that every feature added to a simulation of natural systems tends to reveal further features it
+depends on or that would enhance it: a season system immediately motivates species-specific dormancy;
+species-specific dormancy points to per-species flowering windows; flowering windows lead to seed dispersal.
+There is no natural stopping point, and the discipline of holding scope to the written objectives is
+difficult when each extension has a clear technical motive.
+
+\medskip
+A related lesson is that natural systems are much harder to parameterize convincingly than to implement
+correctly. The L-system rewriting engine was straightforward to unit-test and verify. Choosing branch angles,
+internode growth rates, dormancy thresholds, and seasonal colour transitions that together produce a
+convincing plant took considerably longer and was guided almost entirely by visual iteration. Whilst
+designing grammars to capture a specific plants structure became easier with practice and research, tuning
+the individual parameters remained a time-consuming and challenging process.
+
+\medskip
+Choosing Rust for this project was beneficial for correctness --- the type system enforced important
+invariants (for example, the \texttt{Plant} trait bounds and the generic L-system rule type) and caught
+ownership errors at compile time that would otherwise have been runtime bugs in a garbage-collected language.
+The main cost was the upfront design investment required to satisfy the borrow checker in the rendering and
+scene controller code. With hindsight, a cleaner separation of mutable and immutable data early in the
+architecture design would have reduced the number of refactors needed as the system grew.
+
+% ──────────────────────────────────────────────────────────────────────────────────────────────────────────
+\section{Legal, Social, Ethical and Professional Issues}
+
+\subsection{Legal Issues}
+
+All software dependencies used in this project are open-source under permissive licences, \texttt{cargo-deny}
+was used to validate dependency licences.~\footnote{\url{https://github.com/EmbarkStudios/cargo-deny/}}. No
+proprietary code, datasets, or assets are used. The project does not use, collect or store any personal or
+private information. All third-party sources are properly cited throughout the report.
+
+\medskip
+The three plant grammars adapted from \textit{The Algorithmic Beauty of
+Plants}~\cite{prusinkiewiczAlgorithmicBeautyPlants1990} are derived works. The adaptations are substantial:
+each grammar has been re-parameterised, extended with seasonal behaviour, and re-implemented from scratch in
+Rust rather than copied from any published source code. The original grammars are properly cited throughout
+the report and in the grammar appendix. The FNV-1a hash function used in the voxel occupancy grid is a
+well-known public domain algorithm; its use is acknowledged in the source code and
+cited~\cite{fowlerFNVNonCryptographicHash2026}.
+
+\subsection{Social Issues}
+
+The primary social application of procedural vegetation systems is in entertainment (games) and simulation
+(urban planning, landscape architecture, ecological modelling). In these contexts, high-quality vegetation
+rendering can improve the realism of educational simulations and make ecological concepts more accessible to
+non-specialist audiences. The system's open architecture (modular \texttt{Plant} trait) makes it
+straightforward for domain experts to contribute new species grammars, which could serve as an educational
+resource for students of both computer graphics and botany.
+
+\medskip
+A potential negative social impact is the use of realistic virtual environments as a substitute for
+engagement with real natural environments. If virtual forests become more convenient to experience than
+physical ones, this could reduce the public's motivation to protect real ecosystems. This concern is
+speculative and difficult to quantify, however there has been some discussion over the importance of
+vegetation in video games and its potential positive and negative impacts~\cite{truongGamersItGreen2018}.
+
+\subsection{Ethical Issues}
+
+The most significant ethical issue is energy consumption. GPU-intensive rendering consumes substantial
+electrical power. At the scale of millions of simultaneously running games or simulations (a realistic figure
+for popular game titles), the aggregate energy cost of procedural vegetation rendering has a non-trivial
+impact. This is ethically notable because the aesthetic goal, realistic depiction of natural ecosystems, may
+contribute to the degradation of real natural ecosystems through the energy demands of the computing
+infrastructure required. The energy usage and efficiency of this project has not been quantified, efforts
+have been taken to reduce the computational cost however the impact of these optimizations (LOD system,
+culling) is unknown. If this project was to be deployed at scale the energy efficiency and potential
+environmental impacts should be thoroughly assessed prior to deployment. The irony that realistic virtual
+ecosystems may require energy production with real ecological costs (power station emissions, land use for
+renewables) is an ethical tension that the games and simulation industry has not yet adequately
+addressed~\cite{truongGamersItGreen2018,changGreenComputerVideo}.
+
+\subsection{Professional Issues}
+
+The project follows standard professional software engineering practices throughout: version control with Git
+(providing a full audit trail of development decisions), reproducible builds via Nix (ensuring the software
+can be rebuilt from source by any developer with access to the repository), and modular architecture with
+documented interfaces.
+
+\medskip
+One professional limitation of this project as a solo piece of work is the absence of peer code review. All
+design decisions, including several that were later refactored (the turtle's initial tight coupling to the
+scene controller, the early absence of LOD), were made and reviewed by a single developer. In a team context
+these issues would likely have been caught earlier.
+
+% ──────────────────────────────────────────────────────────────────────────────────────────────────────────
+\chapter{External Material}
+\label{app:external}
+
+\begin{itemize}
+  \item \textbf{Leaf texture.} The leaf texture used is \textit{Leaf Set 024} from \textit{ambientCG.com},
+    licensed under the Creative Commons CC0 1.0 Universal
+    License.\footnote{\url{https://ambientcg.com/view?id=LeafSet024}}
+  \item \textbf{Plant grammar designs.} The grammars for \textit{Capsella}, \textit{Lychnis}, and
+    \textit{Mycelis} are adapted from grammars published in \textit{The Algorithmic Beauty of
+    Plants}~\cite{prusinkiewiczAlgorithmicBeautyPlants1990}.
+  \item \textbf{Ecosystem placement algorithm.} The kernel-based placement, self-thinning, and ecological
+    succession algorithms are implementations of the methods described in Lane and
+    Prusinkiewicz~\cite{laneGeneratingSpatialDistributions2002}.
+  \item \textbf{Software libraries.} \texttt{wgpu}, \texttt{winit}, \texttt{egui}, \texttt{image},
+    \texttt{glam}, \texttt{rand} and \texttt{bytemuck} are used as dependencies. No library source code has
+    been copied into the project; all are used as external crates via the Cargo package manager.
+  \item \textbf{Docs and examples.} The \texttt{wgpu} documentation and examples were consulted whilst
+    implementing the rendering pipeline.~\footnote{\url{https://docs.rs/wgpu/27.0.1/wgpu/} and
+    \url{https://github.com/gfx-rs/wgpu/tree/v27/examples#readme}}
+\end{itemize}
+
+No pre-written code, supervisor-provided materials, or external datasets were used. No human participant data
+was collected.
+
+% ──────────────────────────────────────────────────────────────────────────────────────────────────────────
+\chapter{Turtle Actions}
+\label{app:turtle}
+
+\begin{table}[h]
+  \centering
+  \begin{tabular}{|l|l|l|}
+    \hline
+    \textbf{Action}       & \textbf{Effect}                               & \textbf{Notation} \\
+    \hline
+    \texttt{Branch(l, r)} & Draw cylinder: length $l$, base radius $r$    & $B(..)$, size parameters vary by plant \\
+    \texttt{Leaf(w, h)}   & Draw leaf quad: width $w$, height $h$         & $L(..)$, size parameters vary by plant \\
+    \texttt{Roll(a)}      & Rotate about heading axis by angle $a$ (rad)  & $/$ (clockwise), $\backslash$
+    (anticlockwise) \\
+    \texttt{Turn(a)}      & Rotate about normal axis by angle $a$ (rad)   & $+$ (right), $-$ (left) \\
+    \texttt{Pitch(a)}     & Rotate about binormal axis by angle $a$ (rad) & $\wedge$ (up), $\mathbin{\&}$ (down) \\
+    \texttt{Push}         & Save current turtle state                     & $[$ \\
+    \texttt{Pop}          & Restore last saved state                      & $]$ \\
+    \texttt{Cut}          & Terminate current branch                      & $\%$ \\
+    \texttt{Colour(c)}    & Set current drawing colour to $c$             & $C(\mathbf{c})$ \\
+    \texttt{Nop}          & No operation (used for non-geometric symbols) & \\
+    \hline
+  \end{tabular}
+  \caption{Turtle graphics action set.}
+  \label{tab:actions}
+\end{table}
+
+% ──────────────────────────────────────────────────────────────────────────────────────────────────────────
+\chapter{Plant Reference}
+\label{app:plants}
+
+All figures in this section were generated using the default settings and a seed of 7, the ground and
+background were set to black and a single plant was positioned at $(0, 0, 0)$. Images were then cropped and
+stitched together. Unless otherwise specified grammars use the notation detailed in Table \ref{tab:actions}.
+
+% ──────────────────────────────────────────────────────────────────────────────────────────────────────────
+\section{Fern}
+\label{app:fern}
+
+\begin{figure}[h]
+  \centering
+  \resizebox{\textwidth}{!}{\includegraphics{fern}}
+  \caption{Fern growth stages, each iteration is three steps apart.}
+  \label{fig:fern}
+\end{figure}
+
+\textbf{Nonterminals:}
+\begin{itemize}
+  \item $\mathrm{L}(a, d, \delta)$ --- frond leaf node; age $a$, node distance $d$, branching depth $\delta$
+  \item $\mathrm{Br}(a, \delta)$ --- branch segment; age $a$, branching depth $\delta$
+  \item $\mathrm{Cy}(e, \delta)$ --- crown layer; expansion delay $e$, crown depth $\delta$
+\end{itemize}
+
+\textbf{Parameters:}
+\begin{itemize}
+  \item $\alpha$ --- branch angle (default $60^\circ$)
+  \item $\theta_d$ --- frond droop angle (default $-10^\circ$)
+  \item $a_{\max} = 7$ --- maximum leaf age
+  \item $d_{\max} = 9$ --- maximum frond node distance
+  \item $\delta_{\max} = 3$ --- maximum branching depth
+  \item $a_b = 3$ --- minimum age for lateral branching
+  \item $e_0 = 3$ --- crown expansion delay
+  \item $\rho_c = \tfrac{2\pi}{3}$ --- crown radial separation angle
+  \item $\mu = \tfrac{\pi}{6}$ --- crown pitch factor
+\end{itemize}
+
+\textbf{Grammar:}
+
+Let $\Omega(\delta)$ denote the frond macro and $\varphi(d,\, \delta)$ denote the droop equation:
+\begin{align*}
+  \Omega(\delta)       &= \bigl[\, \wedge(\mu\sqrt{\delta})\; \mathrm{L}(a_b,\, \delta,\, 1)\, \bigr] \\
+  \varphi(d,\, \delta) &= \theta_d\! \left(\tfrac{\delta_{\max} - \delta}{\delta_{\max}} + \tfrac{2d}{d_{\max}}\right)
+\end{align*}
+
+The grammar is defined as:
+% tex-fmt: off
+\begin{align*}
+\omega \quad &: /\! \bigl(\tfrac{\pi}{2}\bigr)\; {-}\! \bigl(\tfrac{\pi}{2}\bigr)\; {\backslash}\! \bigl(\tfrac{\pi}{2}\bigr)\; \mathrm{Cy}(0,\, 1) \\
+p_0    \quad &: \mathrm{L}(a, d, \delta) : a < a_{\max}\; \land\; \bigl(a < a_b\; \lor\; d > d_{\max}\; \lor\; \delta \ge \delta_{\max}\bigr)\; \rightarrow\;\mathrm{L}(a{+}1,\, d,\, \delta) \\
+p_1    \quad &: \mathrm{L}(a, d, \delta) : a_b \le a \le a_{\max}\; \land\; d \le d_{\max}\; \land\; \delta < \delta_{\max} \\
+             &  \qquad \; \rightarrow\;\mathbin{\&}(\varphi(d,\, \delta))\; \mathrm{Br}(1,\, \delta)\; \bigl[\, {-}(\alpha)\; \mathrm{L}(a_b{-}1,\, d,\, \delta{+}1)\, \bigr]\; \bigl[\, \mathrm{Br}(1,\, \delta)\; \mathrm{L}(a,\, d{+}1,\, \delta)\, \bigr]\; \bigl[\, {+}(\alpha)\; \mathrm{L}(a_b{-}1,\, d,\, \delta{+}1)\, \bigr] \\
+p_2    \quad &: \mathrm{Br}(a, \delta) : a \le a_{\max}\; \rightarrow\;\mathrm{Br}(a{+}1,\, \delta) \\
+p_3    \quad &: \mathrm{Cy}(e, \delta) : e > 0\; \rightarrow\;\mathrm{Cy}(e{-}1,\, \delta) \\
+p_4    \quad &: \mathrm{Cy}(0, \delta)\; \rightarrow\;\Omega(\delta)\; {+}(\rho_c)\; \Omega(\delta)\; {+}(\rho_c)\; \Omega(\delta)\; {+}\!\left(\tfrac{\rho_c}{\delta{+}1}\right)\; \mathrm{Cy}(e_0,\, \delta{+}2)
+\end{align*}
+% tex-fmt: on
+
+% ──────────────────────────────────────────────────────────────────────────────────────────────────────────
+\section{Mint}
+\label{app:mint}
+
+\begin{figure}[h]
+  \centering
+  \resizebox{\textwidth}{!}{\includegraphics{mint}}
+  \caption{Mint growth stages, each iteration is four steps apart.}
+  \label{fig:mint}
+\end{figure}
+
+\textbf{Nonterminals:}
+\begin{itemize}
+  \item $A(t)$ --- main stem apex; node counter $t$
+  \item $Q$ --- lateral sub-stem apex
+  \item $I(l)$ --- internode segment; current length $l$
+\end{itemize}
+
+\textbf{Parameters:}
+\begin{itemize}
+  \item $\alpha_l$ --- leaf spread angle (default $70°$)
+  \item $\alpha_b$ --- lateral sub-stem angle (default $35°$)
+  \item $n_A$ --- maximum node count (default $6$)
+  \item $\rho = \tfrac{\pi}{2}$ --- roll between internode pairs
+\end{itemize}
+
+\textbf{Grammar:}
+
+Let $\Omega$ denote the leaf-node macro and let $\Lambda$ denote the lateral branch pair:
+\begin{align*}
+  \Omega  &=
+  I\; [\, +(\alpha_l)\; L(w_l,h_l)\, ]\; [\, -(\alpha_l)\; L(w_l,h_l)\, ]\; /(\rho)\;
+  I\; [\, +(\alpha_l)\; L(w_l,h_l)\, ]\; [\, -(\alpha_l)\; L(w_l,h_l)\, ]\; /(\rho) \\
+  \Lambda &= [\, /(\pi)\; +(\alpha_b)\; Q\, ]\; [\, +(\alpha_b)\; Q\, ]
+\end{align*}
+
+The grammar is defined as:
+% tex-fmt: off
+\begin{align*}
+\omega \quad &: A(0) \\
+p_1    \quad &: A(t) : t < n_A,\; t \not\equiv 2 \; \rightarrow\; \Omega\; A(t{+}1) \\
+p_2    \quad &: A(t) : t < n_A,\; t \equiv 2 \; \rightarrow\; \Omega\; \Lambda\; A(t{+}1) \\
+p_3    \quad &: A(t) : t \ge n_A,\; t \not\equiv 2 \; \rightarrow\; \Omega \\
+p_4    \quad &: A(t) : t \ge n_A,\; t \equiv 2 \; \rightarrow\; \Omega\; \Lambda \\
+p_5    \quad &: Q \; \rightarrow\; \Omega_Q \quad \text{(same as $\Omega$ but with sub-stem $Q$)} \\
+p_6    \quad &: I(l) \; \rightarrow\; I\! \left(\min(l \cdot r_i,\; i_{\max})\right)
+\end{align*}
+% tex-fmt: on
+
+% ──────────────────────────────────────────────────────────────────────────────────────────────────────────
+\section{Wildflower}
+\label{app:wildflower}
+
+\begin{figure}[h]
+  \centering
+  \resizebox{\textwidth}{!}{\includegraphics{wildflower}}
+  \caption{Wildflower growth stages, each iteration is five steps apart.}
+  \label{fig:wildflower}
+\end{figure}
+
+\textbf{Nonterminals:}
+\begin{itemize}
+  \item $P$ --- axiom
+  \item $A(a)$ --- main stem apex; accumulated angle jitter $a$
+  \item $I(a)$ --- lateral branch pair; branch half-angle $a$
+  \item $Q$ --- branch tip
+\end{itemize}
+
+\textbf{Terminals:}
+\begin{itemize}
+  \item $F$ --- stem segment
+\end{itemize}
+
+\textbf{Parameters:}
+\begin{itemize}
+  \item $\alpha$ --- branch angle (default $40°$)
+  \item $\phi \approx 137.5°$ --- golden divergence angle
+  \item $\sigma_1 = 0.05,\; \sigma_2 = 0.50$ --- flower season window
+  \item $\sigma_3 = 0.72$ --- seed dispersal season threshold
+  \item $r_0 \sim \mathcal{U}(0,\, 10)$ --- initial apex jitter
+  \item $j \sim \mathcal{U}(-a,\, a)$ --- per-step heading jitter (sampled using symbol parameter $a$)
+  \item $r_b \sim \mathcal{U}(0°,\, \alpha)$ --- lateral branch angle
+\end{itemize}
+
+\textbf{Grammar:}
+% tex-fmt: off
+\begin{align*}
+\omega \quad &: C_{\mathrm{stem}}\; P \\
+p_1    \quad &: P \; \rightarrow\; [\, A(r_0)\, ] \\
+p_2    \quad &: A(a) \; \rightarrow\; F\, F\, F\; I(40)\; {+}\!(j)\; /(\phi)\; A(a{+}1)\; [\, C_{\mathrm{top}}\, L(w_{\mathrm{top}},\, w_{\mathrm{top}})\, ]_{\sigma < \sigma_3} \\
+p_3    \quad &: I(a) \; \rightarrow\; [\, {-}(a°)\; Q\, ]\; /(\phi)\; [\, {+}(a°)\; Q\, ] \\
+p_4    \quad &: Q \xrightarrow{0.5} F\; Q\; [\, C_{\mathrm{leaf}}\, L(w_l,\, h_l)\, ] \\
+p_5    \quad &: Q \xrightarrow{0.5} I(r_b)
+\end{align*}
+% tex-fmt: on
+
+% ──────────────────────────────────────────────────────────────────────────────────────────────────────────
+\section{\textit{Lychnis}}
+\label{app:lychnis}
+
+\begin{figure}[h]
+  \centering
+  \resizebox{\textwidth}{!}{\includegraphics{lychnis}}
+  \caption{\textit{Lychnis} growth stages, each iteration is four steps apart.}
+  \label{fig:lychnis}
+\end{figure}
+
+\textbf{Nonterminals:}
+\begin{itemize}
+  \item $\mathrm{A}(d)$ --- apex; delay counter $d$
+  \item $\mathrm{I}(c)$ --- internode; remaining branch-segment pair count $c$
+  \item $\mathrm{L}(s)$ --- leaf; growth step $s$
+  \item $\mathrm{K}(s)$ --- flower bud; growth step $s$
+\end{itemize}
+
+\textbf{Terminals:}
+\begin{itemize}
+  \item $B$ --- branch segment
+\end{itemize}
+
+\textbf{Parameters:}
+\begin{itemize}
+  \item $\alpha_l = \tfrac{\pi}{3}$ --- leaf pitch
+  \item $\alpha_b = \tfrac{\pi}{2}$ --- branch pitch
+  \item $\rho = \tfrac{\pi}{2}$ --- roll between branch pairs
+  \item $d_{\text{delay}} = 7$ --- apex expansion delay
+  \item $s_{\max} = 10$ --- maximum growth steps
+  \item $\sigma_1 = 0.10,\; \sigma_2 = 0.48$ --- bloom season window
+\end{itemize}
+
+\textbf{Grammar:}
+
+Let $\Omega(d)$ denote the apex macro and let $\Lambda$ denote the leaf macro:
+\begin{align*}
+  \Omega(d) &= [\, \wedge(\alpha_b)\; \mathrm{A}(d)\, ] \\
+  \Lambda   &= [\, \wedge(\alpha_l)\; \mathrm{L}(0)\, ]
+\end{align*}
+
+The grammar is defined as:
+% tex-fmt: off
+\begin{align*}
+\omega \quad &: \mathrm{A}(d_{\text{delay}}) \\
+p_0    \quad &: \mathrm{A}(d) : d < d_{\text{delay}}\; \rightarrow\;\mathrm{A}(d+1) \\
+p_1    \quad &: \mathrm{A}(d) : d \ge d_{\text{delay}}\; \rightarrow\;B\; \mathrm{I}(20)\; \Lambda\; /(\rho)\; \Omega(0)\; /(\rho)\; \Lambda\; /(\rho)\; \Omega(d_{\text{delay}}{-}3)\; B\; \mathrm{I}(10)\; [\, \mathrm{K}(0)\, ]_{\sigma_1 < \sigma < \sigma_2} \\
+p_2    \quad &: \mathrm{I}(c) : c > 0\; \rightarrow\;B\; B\; \mathrm{I}(c-1) \\
+p_3    \quad &: \mathrm{L}(s) : s < s_{\max}\; \rightarrow\;\mathrm{L}(s+1) \\
+p_4    \quad &: \mathrm{K}(s) : s < s_{\max}\; \rightarrow\;\mathrm{K}(s+1)
+\end{align*}
+% tex-fmt: on
+
+% ──────────────────────────────────────────────────────────────────────────────────────────────────────────
+\section{\textit{Mycelis}}
+\label{app:mycelis}
+
+\begin{figure}[h]
+  \centering
+  \resizebox{\textwidth}{!}{\includegraphics{mycelis}}
+  \caption{\textit{Mycelis} growth stages, each iteration is five
+  steps apart.}
+  \label{fig:mycelis}
+\end{figure}
+
+\textbf{Nonterminals:}
+\begin{itemize}
+  \item $A(t)$ --- apex; delay counter $t$
+  \item $I(t)$ --- internode; delay counter $t$
+  \item $K(c)$ --- flower bud; countdown $c$
+  \item $M$ --- internode marker
+  \item $S$ --- basipetal signal
+  \item $T$ --- signal propagation intermediate
+  \item $W$ --- transient intermediate
+  \item $G$ --- lateral bud
+\end{itemize}
+
+\textbf{Terminals:}
+\begin{itemize}
+  \item $F$ --- internode segment
+  \item $V$ --- stable signal
+  \item $L$ --- leaf
+\end{itemize}
+
+\textbf{Parameters:}
+\begin{itemize}
+  \item $\theta_b$ --- lateral branch angle (default $30°$); $\delta = \theta_b + \tfrac{\pi}{8}$
+  \item $\phi \sim \mathcal{U}(\tfrac{\pi}{6},\, \pi)$ --- roll between internodes
+  \item $c_{\max} = 7$ --- flower bud countdown
+  \item $n_0 = 20$ --- internode delay
+\end{itemize}
+
+\textbf{Grammar:}
+% tex-fmt: off
+\begin{align*}
+\omega    \quad &: I(n_0)\, F\, A(0) \\
+p_1       \quad &: S < A(t)\; \rightarrow\;T\, V\, C_{\mathrm{flower}}\, K(c_{\max})\, C_{\mathrm{stem}} \\
+p_2       \quad &: V < A(t)\; \rightarrow\;T\, V\, C_{\mathrm{flower}}\, K(c_{\max})\, C_{\mathrm{stem}} \\
+p_3       \quad &: A(t): t > 0\; \rightarrow\;A(t-1) \\
+p_4       \quad &: A(t)\; \rightarrow\;M\; [\, {+}(\delta)\; L\; {-}\!\left(\tfrac{\pi}{8}\right)\; G\, ]\; F\; /(\phi)\; A(2) \\
+p_5       \quad &: S < M\; \rightarrow\;S \\
+p_6       \quad &: S > T\; \rightarrow\;T \\
+p_7       \quad &: T < G\; \rightarrow\;F\, A(2) \\
+p_8       \quad &: V < M\; \rightarrow\;S \\
+p_9       \quad &: T > V\; \rightarrow\;W \\
+p_{10}    \quad &: W\; \rightarrow\;V \\
+p_{11}    \quad &: I(t): t > 0\; \rightarrow\;I(t-1) \\
+p_{12}    \quad &: I(t): t = 0\; \rightarrow\;S \\
+p_{13}    \quad &: K(c): c > 0\; \rightarrow\;K(c-1) \\
+\end{align*}
+% tex-fmt: on
+
+% ──────────────────────────────────────────────────────────────────────────────────────────────────────────
+\section{\textit{Capsella}}
+\label{app:capsella}
+
+\begin{figure}[h]
+  \centering
+  \resizebox{\textwidth}{!}{\includegraphics{capsella}}
+  \caption{\textit{Capsella} growth stages, each iteration is five
+  steps apart.}
+  \label{fig:capsella}
+\end{figure}
+
+\textbf{Nonterminals:}
+\begin{itemize}
+  \item $a(t)$ --- vegetative apex; steps remaining $t$
+  \item $A$ --- flowering apex
+  \item $u(t)$ --- lateral-branch angle accumulator; steps remaining $t$
+  \item $I(l)$ --- internode; current length $l$
+  \item $X(t)$ --- fruit pod; maturation countdown $t$
+\end{itemize}
+
+\textbf{Terminals:}
+\begin{itemize}
+  \item $K$ --- flower petal or fruit pod
+\end{itemize}
+
+\textbf{Parameters:}
+\begin{itemize}
+  \item $\alpha_l$ --- leaf pitch (default $70°$)
+  \item $\alpha_b$ --- initial lateral-branch pitch (default $18°$)
+  \item $\phi_g \approx 137.5°$ --- golden divergence angle
+  \item $n_{\mathrm{veg}} = 15$ --- vegetative apex step count
+  \item $n_u = 4$ --- angle accumulator step count
+  \item $\tau = 9°$ --- pitch increment per accumulator step
+  \item $t_x = 5$ --- pod maturation delay
+  \item $\sigma_{\mathrm{pod}} = 0.35$ --- pod transition season threshold
+\end{itemize}
+
+\textbf{Grammar:}
+% tex-fmt: off
+\begin{align*}
+\omega \quad &: I(i_{\mathrm{init}})\; a(n_{\mathrm{veg}}) \\
+p_1    \quad &: a(t): t > 0\; \rightarrow\;[\, \mathbin{\&}(\alpha_l)\; L(w_l,h_l)\, ]\; /(\phi_g)\; I(i_{\mathrm{init}})\; a(t{-}1) \\
+p_2    \quad &: a(t): t = 0\; \rightarrow\;[\, \mathbin{\&}(\alpha_l)\; L(w_l,h_l)\, ]\; /(\phi_g)\; I(i_{\mathrm{init}})\; A \\
+p_3    \quad &: A\; \rightarrow\;[\, \mathbin{\&}(\alpha_b)\; u(n_u)\; I(i_{\mathrm{init}})\; I\! \left(\tfrac{i_{\mathrm{init}}}{2}\right)\; X(t_x)\; K\, K\, K\, K\, ]\; /(\phi_g)\; I(i_{\mathrm{init}})\; A \\
+p_4    \quad &: I(l)\; \rightarrow\;I\! \left(\min(l \cdot r_i,\; i_{\max})\right) \\
+p_5    \quad &: u(t): t > 0\; \rightarrow\;\mathbin{\&}(\tau)\; u(t{-}1) \\
+p_6    \quad &: u(t): t = 0\; \rightarrow\;\mathbin{\&}(\tau) \\
+p_7    \quad &: X(t): t > 0\; \rightarrow\;X(t{-}1)
+\end{align*}
+% tex-fmt: on
+
+% ──────────────────────────────────────────────────────────────────────────────────────────────────────────
+\section{Tree}
+\label{app:tree}
+
+\begin{figure}[h]
+  \centering
+  \resizebox{\textwidth}{!}{\includegraphics{tree}}
+  \caption{Tree growth stages, each iteration is two steps apart.}
+  \label{fig:tree}
+\end{figure}
+
+\textbf{Nonterminals:}
+\begin{itemize}
+  \item $T$ --- trunk apex
+  \item $X$ --- branch apex
+  \item $G$ --- leaf cluster
+  \item $F(l,\, d)$ --- internode; length $l$, diameter $d$
+\end{itemize}
+
+\textbf{Parameters:}
+\begin{itemize}
+  \item $\beta$ --- branch angle (default $30.7°$)
+  \item $f_{\mathrm{init}},\; f_{\mathrm{max}}$ --- initial and maximum internode length
+  \item $d_{\mathrm{init}},\; d_{\mathrm{max}}$ --- initial and maximum internode diameter
+  \item $r_f$ --- internode growth multiplier (default $1.35$)
+  \item $f_{\mathrm{rand}}$ --- internode length jitter half-range (default $0.02$)
+  \item $j_t \sim \mathcal{U}(-\varepsilon_t,\, \varepsilon_t)$ --- trunk roll jitter
+  \item $j_b \sim \mathcal{U}(-\varepsilon_b,\, \varepsilon_b)$ --- branch roll jitter
+  \item $p_{\mathrm{shed}}$ --- leaf shed probability
+  \item $n_{\mathrm{shed}}$ --- minimum leaf age before shedding
+\end{itemize}
+
+\textbf{Grammar:}
+
+Let $F_0 = F(f_{\mathrm{init}},\, d_{\mathrm{init}})$, $\Psi(\Theta) = C_{\mathrm{leaf}}\, [\, \Theta\; L^*\,
+]\, C_{\mathrm{bark}}$ where $L^* \in \{L(w_l,h_l),\, \%\}$ with $\mathrm{P}(L^* = \%) = p_{\mathrm{shed}}
+\cdot \mathbf{1}[\mathrm{age} \ge n_{\mathrm{shed}}]$. Let $\Phi(j)$ denote the branch macro:
+\begin{align*}
+  \Phi(j) =
+  \bigl[\, \backslash(\beta)\; {-}(\beta)\; F_0\; X\; [{+}(2\beta)\; G]\, \bigr]\;
+  \bigl[\, \backslash(4\beta)\; {-}(\beta)\; F_0\; X\; [{-}(2\beta)\; G]\, \bigr]\;
+  \backslash(9\beta)\; {-}(\beta)\; F_0\; X\; [{+}(\beta)\; G]
+\end{align*}
+
+The grammar is defined as:
+% tex-fmt: off
+\begin{align*}
+\omega \quad &: T \\
+p_1    \quad &: T \; \rightarrow\; F_0\, F_0\, F_0\; /(j_t)\; \Phi(j_t) \\
+p_2    \quad &: X \; \rightarrow\; F_0\; /(j_b)\; \Phi(j_b) \\
+p_3    \quad &: G \; \rightarrow\; \Psi\! \bigl(\backslash(2\beta)\, {+}(2\beta)\bigr)\; \Psi\! \bigl(\backslash(2\beta)\, {+}(3\beta)\bigr)\; \Psi\! \bigl(/(\beta)\, \wedge(\beta)\, {-}(2\beta)\bigr)\; \Psi\! \bigl(/(2\beta)\, \mathbin{\&}(2\beta)\, {-}(2\beta)\bigr) \\
+p_4    \quad &: F(l,\, d) \; \rightarrow\; F\! \left( \min(l \cdot r_f + r,\; f_{\mathrm{max}}),\; \min(d \cdot r_f,\; d_{\mathrm{max}}) \right) \quad r \sim \mathcal{U}({-}f_{\mathrm{rand}},\; f_{\mathrm{rand}})
+\end{align*}
+% tex-fmt: on
+
+% ──────────────────────────────────────────────────────────────────────────────────────────────────────────
+\section{Bush}
+\label{app:bush}
+
+\begin{figure}[h]
+  \centering
+  \resizebox{\textwidth}{!}{\includegraphics{bush}}
+  \caption{Bush growth stages, each iteration is two steps apart.}
+  \label{fig:bush}
+\end{figure}
+
+\textbf{Nonterminals:}
+\begin{itemize}
+  \item $T$ --- trunk apex
+  \item $X$ --- first-level branch node
+  \item $N$ --- recursive sub-branch node
+\end{itemize}
+
+\textbf{Terminals:}
+\begin{itemize}
+  \item $F$ --- internode segment
+\end{itemize}
+
+\textbf{Parameters:}
+\begin{itemize}
+  \item $\beta$ --- branch angle (default $35.7°$)
+  \item $j_t \sim \mathcal{U}(-\varepsilon_t,\, \varepsilon_t)$ --- trunk roll jitter
+  \item $j_b \sim \mathcal{U}(-\varepsilon_b,\, \varepsilon_b)$ --- branch roll jitter
+  \item $s$ --- leaf scale
+\end{itemize}
+
+\textbf{Grammar:}
+
+Let $\Lambda$ denote the leaf macro and $\Omega_{a,b,c,d}$ denote leaf configurations:
+\begin{align*}
+  \Lambda &= C_{\mathrm{leaf}}\, [\, L(w_l s,\, h_l s)\, ]\, C_{\mathrm{bark}} \\
+  \Omega_a &= {+}(\beta)\; \Lambda \\
+  \Omega_b &= {-}(\beta)\; \Lambda \\
+  \Omega_c &= {+}(2\beta)\; \Lambda \\
+  \Omega_d &= {-}(2\beta)\; \Lambda
+\end{align*}
+
+The grammar is defined as:
+% tex-fmt: off
+\begin{align*}
+\omega \quad &: T \\
+p_1    \quad &: T \; \rightarrow\; F\; /(j_t)\; X \\
+p_2    \quad &: X \; \rightarrow\; F\; /(j_b)\; \bigl[\, \backslash(\beta)\; {-}(\beta)\; F\; N\; [\Omega_c]\, \bigr]\; \bigl[\, \backslash(4\beta)\; {-}(\beta)\; F\; N\; [\Omega_d]\, \bigr]\; \backslash(9\beta)\; {-}(\beta)\; F\; N\; [\Omega_a] \\
+p_3    \quad &: N \; \rightarrow\; F\; F\; /(j_b)\; \bigl[\, \backslash(\beta)\; {-}(\beta)\; F\; N\; [\Omega_a\; \Omega_a]\, \bigr]\; \bigl[\, \backslash(4\beta)\; F\; [\Omega_b\; \Omega_b]\; N\; [\Omega_b\; \Omega_b]\, \bigr]\; \backslash(9\beta)\; {-}(\beta)\; F\; [\Omega_b\; \Omega_b]\; N
+\end{align*}
+% tex-fmt: on
+
+% ──────────────────────────────────────────────────────────────────────────────────────────────────────────
+\chapter{Figures}
+\label{app:figures}
+
+% ──────────────────────────────────────────────────────────────────────────────────────────────────────────
+\section{GUI}
+\label{app:gui}
+
+\begin{figure}[h]
+  \centering
+  \resizebox{0.5\textwidth}{!}{\includegraphics{scene-gui}}
+  \caption{Scene GUI.}
+  \label{fig:scene-gui}
+\end{figure}
+
+\begin{figure}[h]
+  \centering
+  \resizebox{0.5\textwidth}{!}{\includegraphics{environment-gui}}
+  \caption{Envrironment GUI.}
+  \label{fig:environment-gui}
+\end{figure}
+
+\begin{figure}[h]
+  \centering
+  \resizebox{0.5\textwidth}{!}{\includegraphics{plants-gui}}
+  \caption{Plants GUI.}
+  \label{fig:plants-gui}
+\end{figure}
+
+\begin{figure}[h]
+  \centering
+  \resizebox{0.5\textwidth}{!}{\includegraphics{ecosystem-gui}}
+  \caption{Ecosystem GUI.}
+  \label{fig:ecosystem-gui}
+\end{figure}
+
+\begin{figure}[h]
+  \centering
+  \resizebox{0.5\textwidth}{!}{\includegraphics{camera-gui}}
+  \caption{Camera GUI.}
+  \label{fig:camera-gui}
+\end{figure}
+
+\begin{figure}[h]
+  \centering
+  \resizebox{0.5\textwidth}{!}{\includegraphics{display-gui}}
+  \caption{Display GUI.}
+  \label{fig:display-gui}
+\end{figure}
+
+\begin{figure}[h]
+  \centering
+  \resizebox{0.5\textwidth}{!}{\includegraphics{debug-hud}}
+  \caption{Debug HUD.}
+  \label{fig:debug-hud}
+\end{figure}
+
+\end{appendices}
+
+% ──────────────────────────────────────────────────────────────────────────────────────────────────────────
+\chapter{Unit Tests}
+\label{app:tests}
+
+The unit tests are evaluated using \texttt{cargo-nextest}.~\footnote{\url{https://nexte.st/}} Documentation
+is available in the source code. The output of \texttt{cargo nextest run --cargo-profile release} is shown
+below (the output has been slightly condensed for clarity, no tests were removed or altered).
+
+\begin{verbatim}
+PASS [0.002s] settings::tests::season_tint_is_continuous
+PASS [0.002s] settings::tests::season_name_works_with_negative
+PASS [0.002s] settings::tests::ecosystem_mark_dirty_increments_generation
+PASS [0.002s] settings::tests::plant_type_growth_rate_positive
+PASS [0.002s] settings::tests::season_name_wraps_at_1
+PASS [0.002s] settings::tests::season_name_covers_all_quadrants
+PASS [0.004s] settings::tests::plant_type_shade_tolerance_in_range
+PASS [0.004s] settings::tests::environment_mark_dirty_increments_generation
+PASS [0.004s] settings::tests::scene_mark_dirty_increments_generation
+PASS [0.002s] settings::tests::season_tint_winter_is_cool
+PASS [0.004s] settings::tests::season_tint_summer_is_white
+PASS [0.002s] util::lsystem::tests::algae
+PASS [0.002s] util::lsystem::tests::context_left_skips_branches
+PASS [0.002s] util::lsystem::tests::context_left_skips_ignored_symbols
+PASS [0.002s] util::lsystem::tests::context_left_only
+PASS [0.002s] util::lsystem::tests::context_left_and_right_match
+PASS [0.002s] util::lsystem::tests::context_no_match_wrong_left
+PASS [0.002s] util::lsystem::tests::context_no_match_wrong_right
+PASS [0.002s] util::lsystem::tests::context_right_nested_branch_skipped_after_mismatch
+PASS [0.002s] util::lsystem::tests::context_right_only
+PASS [0.002s] util::lsystem::tests::context_sensitive_has_priority_over_normal
+PASS [0.002s] util::lsystem::tests::context_right_searches_multiple_branches
+PASS [0.002s] util::lsystem::tests::context_sensitive_has_priority_over_parametric
+PASS [0.003s] util::lsystem::tests::context_right_finds_symbol_in_branch
+PASS [0.002s] util::lsystem::tests::evolve_zero_steps_unchanged
+PASS [0.004s] util::lsystem::tests::context_no_match_at_left_edge
+PASS [0.002s] util::lsystem::tests::nonterminal_without_rule_passes_through
+PASS [0.002s] util::lsystem::tests::evolve_matches_repeated_step
+PASS [0.004s] util::lsystem::tests::context_sensitive_has_priority_over_stochastic
+PASS [0.002s] util::lsystem::tests::normal_fallback_when_context_unmatched
+PASS [0.002s] util::lsystem::tests::parametric_ignored_symbol_does_not_satisfy_context
+PASS [0.002s] util::lsystem::tests::parametric_reads_inline_value
+PASS [0.003s] util::lsystem::tests::parametric_conditional_countdown
+PASS [0.002s] util::lsystem::tests::stochastic_falls_back_to_normal
+PASS [0.003s] util::lsystem::tests::parametric_context_matches_by_discriminant
+PASS [0.003s] util::lsystem::tests::stochastic_never_fires_at_prob_0
+PASS [0.002s] util::lsystem::tests::terminal_passes_through
+PASS [0.004s] util::lsystem::tests::stochastic_always_fires_at_prob_1
+PASS [0.002s] util::turtle::tests::branch_below_min_radius_skips_mesh
+PASS [0.002s] util::turtle::tests::branch_generates_cylinder_geometry
+PASS [0.002s] util::turtle::tests::combine_line_geometries_merges_indices
+PASS [0.002s] util::turtle::tests::combine_mesh_geometries_offsets_indices
+PASS [0.002s] util::turtle::tests::cut_at_depth_zero_is_ignored
+PASS [0.002s] util::turtle::tests::cut_inside_branch_skips_to_pop
+PASS [0.002s] util::turtle::tests::cut_only_affects_enclosing_branch
+PASS [0.002s] util::turtle::tests::fresh_turtle_has_no_line_segments
+PASS [0.003s] util::turtle::tests::branch_lod_zero_segments_skips_mesh
+PASS [0.002s] util::turtle::tests::fresh_turtle_has_no_mesh
+PASS [0.002s] util::turtle::tests::leaf_skip_prob_one_skips_all_leaves
+PASS [0.002s] util::turtle::tests::leaf_generates_double_sided_quad
+PASS [0.002s] util::turtle::tests::lod_segment_count_controls_branch_vertices
+PASS [0.002s] util::turtle::tests::nested_push_pop_restores_to_outer_state
+PASS [0.002s] util::turtle::tests::mesh_index_count_matches_geometry
+PASS [0.002s] util::turtle::tests::multiple_leaves_accumulate
+PASS [0.002s] util::turtle::tests::pitch_tilts_heading_upward
+PASS [0.002s] util::turtle::tests::roll_does_not_change_heading
+PASS [0.002s] util::turtle::tests::scale_multiplies_travel_distance
+PASS [0.002s] util::turtle::tests::space_pruning_allows_well_separated_branches
+PASS [0.002s] util::turtle::tests::space_pruning_considers_branch_width
+PASS [0.002s] util::turtle::tests::space_pruning_inter_plant_branches_are_blocked
+PASS [0.002s] util::turtle::tests::travel_produces_one_segment
+PASS [0.002s] util::turtle::tests::space_pruning_disabled_allows_overlapping_branches
+PASS [0.002s] util::turtle::tests::space_pruning_intra_plant_branches_never_block_each_other
+PASS [0.003s] util::turtle::tests::push_pop_restores_position_for_travel
+PASS [0.003s] util::turtle::tests::space_pruning_blocks_mid_segment_overlap
+PASS [0.002s] util::turtle::tests::turn_rotates_heading_left
+PASS [0.003s] world::ecosystem::tests::bell_is_decreasing
+PASS [0.002s] world::ecosystem::tests::bell_at_one_is_near_zero
+PASS [0.003s] world::ecosystem::tests::bell_at_zero_is_one
+PASS [0.002s] world::ecosystem::tests::mixed_kappa_at_origin_is_negative_one
+PASS [0.002s] world::ecosystem::tests::different_seeds_produce_different_placements
+PASS [0.002s] world::ecosystem::tests::empty_species_returns_empty
+PASS [0.002s] world::ecosystem::tests::mixed_kappa_boundary_switches_sign
+PASS [0.002s] world::ecosystem::tests::self_thinning_non_overlapping_keeps_both
+PASS [0.002s] world::ecosystem::tests::mixed_kappa_mid_range_is_positive
+PASS [0.002s] world::ecosystem::tests::self_thinning_empty_stays_empty
+PASS [0.003s] world::ecosystem::tests::mixed_kappa_inner_range_is_negative
+PASS [0.003s] world::ecosystem::tests::mixed_kappa_far_range_near_zero
+PASS [0.003s] world::ecosystem::tests::plants_placed_within_area
+PASS [0.004s] world::ecosystem::tests::instances_have_zero_y_position
+PASS [0.002s] world::ecosystem::tests::self_thinning_removes_smaller_overlapping_plant
+PASS [0.005s] world::ecosystem::tests::generates_requested_plant_count
+PASS [0.003s] world::ecosystem::tests::zero_num_plants_returns_empty
+PASS [0.003s] world::ecosystem::tests::species_weights_respected
+PASS [0.003s] world::ecosystem::tests::self_thinning_single_plant_unchanged
+PASS [0.004s] world::ecosystem::tests::self_thinning_reduces_count
+PASS [0.005s] world::ecosystem::tests::same_seed_produces_identical_results
+PASS [0.002s] world::plants::tests::dormancy_positive_offset_shifts_onset_earlier
+PASS [0.002s] world::plants::tests::dormancy_offset_wraps_across_year_boundary
+PASS [0.003s] world::plants::tests::all_plants_produce_actions_at_iteration_0
+PASS [0.003s] world::plants::tests::dormancy_max_in_full_winter
+PASS [0.002s] world::plants::tests::lerp_at_max_age_returns_old
+PASS [0.002s] world::plants::tests::lerp_at_age_zero_returns_young
+PASS [0.002s] world::plants::tests::dormancy_smoothstep_at_recovery_midpoint
+PASS [0.002s] world::plants::tests::lerp_at_half_age_is_midpoint
+PASS [0.005s] world::plants::tests::all_plants_produce_actions_at_iteration_1
+PASS [0.002s] world::plants::tests::lerp_clamps_past_max_age
+PASS [0.002s] world::plants::tests::dormancy_wraps_at_season_one
+PASS [0.002s] world::plants::tests::plant_instance_clone_preserves_fields
+PASS [0.003s] world::plants::tests::dormancy_smoothstep_at_onset_midpoint
+PASS [0.003s] world::plants::tests::dormancy_zero_before_onset
+PASS [0.002s] world::plants::tests::plant_instance_default_values
+PASS [0.002s] world::plants::tests::plant_instance_with_transform_preserves_delay
+PASS [0.002s] world::plants::tests::plant_instance_with_transform_sets_fields
+PASS [0.002s] world::plants::tests::plant_iteration_reported_correctly
+PASS [0.002s] world::plants::tests::plant_max_iterations_positive
+PASS [0.002s] world::plants::tests::plant_type_reported_correctly
+PASS [0.003s] world::plants::tests::plant_properties_consistent
+PASS [0.003s] world::plants::tests::set_iteration_to_same_value_does_not_change_actions
+
+Summary [0.029s] 109 tests run: 109 passed, 0 skipped
+\end{verbatim}

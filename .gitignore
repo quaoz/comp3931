@@ -4,3 +4,16 @@ result
 
 # rust
 /target
+
+# latex core
+*.aux
+*.fls
+*.log
+*.toc
+# latex bibliography
+*.bbl
+*.blg
+# latex build
+*.fdb_latexmk
+*.synctex.gz
+*.synctex(busy)

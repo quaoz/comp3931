@@ -1,0 +1,225 @@
+% High-level system architecture of the Procedural Vegetation Generation system.
+% Include in a figure environment with:
+%   \resizebox{\textwidth}{!}{\input{chapters/figures/architecture}}
+\pgfdeclarelayer{background}
+\pgfsetlayers{background,main}
+
+\begin{tikzpicture}[
+    every node/.style={font=\sffamily\footnotesize},
+    % Application / event loop nodes
+    app/.style={
+      rectangle, rounded corners=3pt,
+      draw=blue!70!black, fill=blue!8,
+      minimum width=3.2cm, minimum height=0.55cm,
+      text centered
+    },
+    % Settings subsystem nodes
+    conf/.style={
+      rectangle, rounded corners=3pt,
+      draw=green!60!black, fill=green!8,
+      minimum width=2.6cm, minimum height=0.55cm,
+      text centered
+    },
+    % World / camera nodes
+    world/.style={
+      rectangle, rounded corners=3pt,
+      draw=orange!80!black, fill=orange!8,
+      minimum width=2.6cm, minimum height=0.55cm,
+      text centered
+    },
+    % Scene / controller nodes
+    scene/.style={
+      rectangle, rounded corners=3pt,
+      draw=teal!80!black, fill=teal!8,
+      minimum width=3.2cm, minimum height=0.55cm,
+      text centered
+    },
+    % Plant / L-System nodes
+    plant/.style={
+      rectangle, rounded corners=3pt,
+      draw=violet!80!black, fill=violet!8,
+      minimum width=2.8cm, minimum height=0.55cm,
+      text centered
+    },
+    % Geometry nodes
+    geom/.style={
+      rectangle, rounded corners=3pt,
+      draw=brown!70!black, fill=brown!8,
+      minimum width=2.6cm, minimum height=0.55cm,
+      text centered
+    },
+    % GPU / render nodes
+    gpu/.style={
+      rectangle, rounded corners=3pt,
+      draw=red!70!black, fill=red!8,
+      minimum width=3.2cm, minimum height=0.55cm,
+      text centered
+    },
+    % Group box style (parameterised by colour name)
+    grp/.style={
+      rectangle, rounded corners=6pt,
+      draw=#1!60, fill=#1!4,
+      inner sep=8pt
+    },
+    % Primary solid arrow
+    arr/.style={-{Stealth[length=5pt]}, thick},
+    % Dashed dependency / ownership arrow
+    darr/.style={-{Stealth[length=4pt]}, dashed, thin, gray}
+  ]
+
+  %% ── Column centres
+  % ──────────────────────────────────────────────────────────
+  % Left  (Settings):  x =  1.5
+  % Centre (App):      x =  6.5
+  % Right-mid (Plants):x = 10.5
+  % Far-right (World): x = 14.0
+
+  %% ── Application spine
+  % ───────────────────────────────────────────────────────
+  \node[app] (eventloop) at (0,  0.0) {winit EventLoop};
+  \node[app] (app)       at (0, -1.5) {App (ApplicationHandler)};
+  \node[app] (state)     at (0, -3.0) {State};
+
+  %% ── Settings subsystem
+  % ──────────────────────────────────────────────────────
+  \node[conf] (sethead)  at (-5, -3.0) {Settings};
+  \node[conf] (setscene) at (-5, -4.0) {SceneSettings};
+  \node[conf] (setenv)   at (-5, -5.0) {EnvironmentSettings};
+  \node[conf] (setother) at (-5, -6.0) {Camera / Display / LOD};
+
+  \begin{pgfonlayer}{background}
+    \node[grp=green, fit=(sethead)(setscene)(setenv)(setother),
+    label={[font=\sffamily\tiny,text=green!60!black]above left:settings.rs}]
+    (settingsgroup) {};
+  \end{pgfonlayer}
+
+  %% ── World subsystem (x=14.0 — clear of the plant group on the
+  % right) ────────
+  \node[world] (world)  at (5, -3.0) {World};
+  \node[world] (camera) at (5, -4.0) {Camera};
+  \node[world] (egui)   at (5, -5.0) {EguiRenderer};
+
+  \begin{pgfonlayer}{background}
+    \node[grp=orange, fit=(world)(camera)(egui),
+    label={[font=\sffamily\tiny,text=orange!70!black]above right:world/}]
+    (worldgroup) {};
+  \end{pgfonlayer}
+
+  %% ── Renderer
+  % ────────────────────────────────────────────────────────────────
+  \node[gpu] (renderer) at (0, -4.5) {Renderer};
+
+  %% ── Scene controller
+  % ────────────────────────────────────────────────────────
+  \node[scene] (scenectrl) at (0, -6.0) {SceneController};
+
+  %% ── Plant / L-System cluster (x=10.5 — clear of world group at x=14.0) ─────
+  \node[plant] (ecosystem) at (-4, -8.0) {Ecosystem};
+  \node[plant] (plantinst) at (-4, -9.5) {PlantInstance (\texttimes N)};
+  \node[plant] (lsystem)   at (-4, -11.0) {LSystem\textless{}S\textgreater{}};
+  \node[plant] (rules)     at (-4, -12.5) {Rule\textless{}S\textgreater{}};
+
+  \begin{pgfonlayer}{background}
+    \node[grp=violet, fit=(ecosystem)(plantinst)(lsystem)(rules),
+    label={[font=\sffamily\tiny,text=violet!70!black]above left:world/plants/}]
+    (plantgroup) {};
+  \end{pgfonlayer}
+
+  %% ── Turtle / Geometry
+  % ───────────────────────────────────────────────────────
+  \node[geom] (turtle)  at (4, -8.0) {Turtle};
+  \node[geom] (linegeo) at (2, -9.5) {LineGeometry};
+  \node[geom] (meshgeo) at (6, -9.5) {MeshGeometry};
+
+  %% ── GPU Buffers + Pipelines
+  % ─────────────────────────────────────────────────
+  \node[gpu] (gpubuf)       at (4, -11.0) {GPU Buffers (vertex / index)};
+  \node[gpu] (pipelined)    at (2, -12.5) {Line Pipeline};
+  \node[gpu] (pipelinemesh) at (6, -12.5) {Mesh Pipeline};
+  \node[gpu] (display)      at (4, -14.0) {Surface / Display (wgpu)};
+
+  %%─────────────────────────────────────────────────────────────────────────────
+  %% ARROWS
+  %%─────────────────────────────────────────────────────────────────────────────
+
+  %% Application spine
+  \draw[arr, blue!60!black] (eventloop) -- (app)
+  node[midway, right, font=\sffamily\tiny] {AppEvent};
+  \draw[arr, blue!60!black] (app) -- (state)
+  node[midway, right, font=\sffamily\tiny] {AppEvent::Start / input};
+
+  %% State → subsystems (ownership)
+  \draw[darr] (state.west) -- +(-0.6,0) |- (sethead.east)
+  node[pos=0.3, above, font=\sffamily\tiny, text=gray] {owns};
+  \draw[darr] (state.east) -- +(0.6,0) |- (world.west)
+  node[pos=0.3, above, font=\sffamily\tiny, text=gray] {owns};
+
+  %% State → Renderer
+  \draw[arr, teal!70!black] (state.south) -- (renderer.north)
+  node[midway, right, font=\sffamily\tiny] {render()};
+
+  %% Camera → Renderer (view/proj matrix) — stays above the plant group
+  \draw[darr] (camera.west) -- +(-1.5,0) |- (renderer.east)
+  node[pos=0, above, font=\sffamily\tiny, text=gray] {view\_proj};
+
+  %% Renderer → SceneController
+  \draw[arr, teal!70!black] (renderer.south) -- (scenectrl.north)
+  node[midway, right, font=\sffamily\tiny] {set\_scene()};
+
+  %% Settings dirty flags → SceneController
+  \draw[darr] (setscene.east) -- +(1.5,0) |- (scenectrl.west)
+  node[pos=0.3, above, font=\sffamily\tiny, text=gray] {dirty flags};
+
+  %% SceneController → Ecosystem
+  \coordinate (sceneunder) at ($(scenectrl.south) + (0, -0.75)$);
+  \draw[arr, violet!70!black] (scenectrl.south) -- (sceneunder)
+  -| (ecosystem.north);
+
+  %% Ecosystem → PlantInstance → LSystem → Rules
+  \draw[arr, violet!70!black] (ecosystem.south) -- (plantinst.north)
+  node[midway, right, font=\sffamily\tiny] {per-plant};
+  \draw[arr, violet!70!black] (plantinst.south) -- (lsystem.north)
+  node[midway, right, font=\sffamily\tiny] {actions()};
+  \draw[arr, violet!70!black] (lsystem.south) -- (rules.north)
+  node[midway, right, font=\sffamily\tiny] {evolve(n)};
+
+  %% Rules → Turtle: route AROUND the left side to avoid passing through Turtle.
+  %% Path: rules.west → waypoint at x=3.0 (clear of all nodes) → turtle.west
+  \coordinate (rt) at ($(rules.east) + (2.6, 0)$);
+  \draw[arr, brown!70!black] (rules.east)
+  -- node[above, font=\sffamily\tiny] {Action[ ]} (rt)
+  |- (turtle.west);
+
+  %% Turtle → line/mesh geometry (fork via shared stem)
+  \coordinate (turtlestem) at ($(turtle.south) + (0, -0.5)$);
+  \draw[brown!70!black, thick] (turtle.south) -- (turtlestem);
+  \draw[arr, brown!70!black] (turtlestem) -| (linegeo.north);
+  \draw[arr, brown!70!black] (turtlestem) -| (meshgeo.north);
+
+  %% Geometry → GPU buffers
+  \coordinate (bufstem) at ($(gpubuf.north) + (0, 0.5)$);
+  \draw[arr, red!70!black] (linegeo.south) -- +(0,-0.4) -|
+  ($(gpubuf.north) + (-0.6, 0)$);
+  \draw[arr, red!70!black] (meshgeo.south) -- +(0,-0.4) -|
+  ($(gpubuf.north) + (0.6, 0)$);
+
+  %% GPU buffers → pipelines (fork)
+  \coordinate (gpustem) at ($(gpubuf.south) + (0, -0.5)$);
+  \draw[red!70!black, thick] (gpubuf.south) -- (gpustem);
+  \draw[arr, red!70!black] (gpustem) -| (pipelined.north);
+  \draw[arr, red!70!black] (gpustem) -| (pipelinemesh.north);
+
+  %% Pipelines → Display
+  \draw[arr, red!70!black] (pipelined.south)    -- +(0,-0.4) -|
+  ($(display.north) + (-0.6,0)$);
+  \draw[arr, red!70!black] (pipelinemesh.south) -- +(0,-0.4) -|
+  ($(display.north) + ( 0.6,0)$);
+
+  %% EguiRenderer → Display: route around the RIGHT edge of the diagram.
+  %% Goes east of all nodes, then down, then arrives at display.east.
+  \draw[darr] (egui.east)
+  -| ($(display.east) + (2,0)$)
+  node[pos=0.5, right, font=\sffamily\tiny, text=gray] {UI overlay}
+  -| (display.east);
+
+\end{tikzpicture}

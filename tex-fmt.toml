@@ -1,0 +1,3 @@
+wraplen = 120
+format-tables = true
+no-indent-envs = ["appendices"]

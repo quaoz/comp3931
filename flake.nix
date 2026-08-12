@@ -48,7 +48,6 @@
             buildCommand =
               prev.buildCommand
               + ''
-                ls $out/etc/bash_completion.d
                 if [ -d $out/etc/bash_completion.d ]; then
                   mkdir -p $out/share/bash-completion/completions
                   cp $out/etc/bash_completion.d/* $out/share/bash-completion/completions
@@ -74,11 +73,74 @@
 
           cargoArtifacts = craneLib.buildDepsOnly commonArgs;
 
+          typosConfig = let
+            gen = list: lib.genAttrs list (n: n);
+          in
+            (pkgs.formats.toml {}).generate "typos.toml" {
+              default = {
+                locale = "en-gb";
+                extend-words = gen ["lod"];
+              };
+
+              type = let
+                toml = [
+                  # rustfmt
+                  "normalize_doc_attributes"
+                  "normalize_comments"
+                ];
+
+                rust = [
+                  # wgpu
+                  "initialize_adapter_from_env_or_default"
+                  "RenderPassColorAttachment"
+                  "color_attachments"
+                  "ColorTargetState"
+                  "ColorWrites"
+                  "Color"
+                  # egui
+                  "color_edit_button_rgb"
+                  "colored_label"
+                  "Color32"
+                  # glam
+                  "normalise_and_length"
+                  "normalize_or_zero"
+                  "normalize_or"
+                  "normalize"
+                  # tests
+                  "ABD"
+                  "BA"
+                ];
+              in {
+                tex.extend-ignore-re = [
+                  "^[[:space:]]*text centered[[:space:]]*$"
+                  "[[:punct:]](begin|end)[[:punct:]](centre|itemize)[[:punct:]]"
+                  "[[:punct:]]cite[[:punct:]][[:word:]]+(,[[:word:]]+)+[[:punct:]]"
+                ];
+
+                toml.extend-identifiers = gen toml;
+                rust.extend-identifiers = gen rust;
+
+                nix.extend-identifiers = gen (builtins.concatLists [
+                  [
+                    "cargoArtifacts"
+                    "analyzer"
+                    "centered"
+                    "itemize"
+                    "centre"
+                  ]
+                  toml
+                  rust
+                ]);
+              };
+            };
+
           treefmt = inputs.treefmt-nix.lib.evalModule pkgs {
             projectRootFile = "flake.nix";
 
             settings.global.excludes = [
               "/assets/textures/*"
+              "/report/**/*.pdf_tex"
+              "/report/refs.bib"
               "/flake.lock"
               "/LICENSE"
             ];
@@ -96,6 +158,13 @@
               };
               taplo.enable = true;
               wgslfmt.enable = true;
+
+              # report
+              texfmt.enable = true;
+              typos = {
+                enable = false;
+                configFile = typosConfig.outPath;
+              };
             };
           };
         in
@@ -145,13 +214,22 @@
     });
 
     devShells = forAllSystems ({
+      pkgs,
       system,
       treefmt,
       craneLib,
       ...
     }: {
       default = craneLib.devShell {
-        packages = builtins.attrValues treefmt.config.build.programs ++ [self.formatter.${system}];
+        packages =
+          builtins.attrValues treefmt.config.build.programs
+          ++ [
+            self.formatter.${system}
+
+            pkgs.imagemagick
+            pkgs.optipng
+          ];
+
         checks = self.checks.${system};
       };
     });

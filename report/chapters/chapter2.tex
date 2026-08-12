@@ -1,0 +1,165 @@
+\chapter{Methodology}
+\label{chapter2}
+
+% ──────────────────────────────────────────────────────────────────────────────────────────────────────────
+\section{System Design}
+
+\subsection{Technology Choices}
+
+\paragraph{Programming language.}
+Rust was chosen as the implementation language. The primary alternatives considered were C++ and Python. C++
+would provide comparable performance but lacks the ownership and borrowing system that prevents common
+graphics programming bugs such as dangling pointers into GPU-mapped buffers and use-after-free in callback
+closures. Python was ruled out on performance grounds: L-System rewriting and turtle traversal operations are
+executed hundreds of thousands of times per scene rebuild, and an interpreted language would make interactive
+frame rates unattainable without a native extension layer that would add significant complexity.
+Additionally, Rust's type system and trait-based polymorphism allow for a safe and flexible L-System
+implementation without sacrificing performance.
+
+\paragraph{Graphics API.}
+\texttt{wgpu} was selected as the graphics API. Libraries providing Vulkan and OpenGL bindings such as
+\texttt{ash} and \texttt{glow} were considered as alternatives. Whilst targeting Vulkan or OpenGL directly
+allows for more control over the rendering process, the higher level abstraction provided by \texttt{wgpu}
+reduces the complexity and eliminates platform specific boilerplate. Additionally, as \texttt{wgpu} runs
+natively through Vulkan, Metal, DirectX 12 and OpenGL ES~\cite{WgpuPortableGraphics}, using it as the
+graphics API increases portability with minimal performance cost.
+
+\paragraph{Windowing and GUI.}
+\texttt{winit} provides cross-platform windowing and uses an event-driven model that integrates cleanly with
+\texttt{wgpu}'s surface management. For the GUI library \texttt{egui} was chosen over \texttt{imgui} as it is
+simpler to integrate with \texttt{wgpu} and its immediate-mode model allows for changes in parameters to be
+reflected automatically without the need for explicit event wiring.
+
+\paragraph{Additional dependencies.}
+\texttt{glam} provides SIMD-accelerated linear algebra types (\texttt{Vec3}, \texttt{Mat4}) used throughout
+the geometry pipeline. \texttt{bytemuck} enables safe zero-copy casting of Rust structs to byte slices for
+GPU buffer uploads, with compile-time guarantees of correct memory layout and alignment. The \texttt{rand}
+crate provides a seed-controlled \texttt{SmallRng} used for stochastic L-System rules and ecosystem
+placement; seeding the generator before each scene build ensures full reproducibility from a single integer
+seed. The \texttt{image} crate is used to load the leaf texture atlas from PNG at startup.
+
+% ──────────────────────────────────────────────────────────────────────────────────────────────────────────
+\subsection{Architectural Design}
+\label{sec:architecture}
+
+The system is structured in five layers as shown in Figure~\ref{fig:arch}. The central design principle is
+that each layer communicates through a narrow, well-defined interface, keeping grammar logic, geometry
+generation, and rendering fully decoupled from one another.
+
+\begin{figure}[h]
+  \centering
+  \resizebox{\textwidth}{!}{\input{chapters/figures/architecture}}
+  \caption{System architecture. Solid arrows denote call/data flow; dashed arrows denote ownership or
+    configuration dependencies. The \texttt{SceneController} is the interface between the rendering layer
+  and the plant/L-System subsystem.}
+  \label{fig:arch}
+\end{figure}
+
+\paragraph{Application layer.}
+The \texttt{State} struct owns the \texttt{EguiRenderer}, \texttt{World}, and \texttt{Settings} and drives
+the \texttt{winit} event loop via the \texttt{ApplicationHandler} trait. Keyboard shortcuts for scene cycling
+and parameter stepping are handled here, keeping input logic out of the rendering path. Settings are
+organised into sub-structs (\texttt{SceneSettings}, \texttt{EnvironmentSettings}, \texttt{CameraSettings},
+\texttt{DisplaySettings}, \texttt{LodSettings}, and \texttt{CullSettings}) each carrying a generation counter
+incremented by \texttt{mark\_dirty()}; the scene controller rebuilds only when the observed generation
+differs from its last-seen value.
+
+\paragraph{World and scene control.}
+\texttt{World} owns the camera, projection, and \texttt{SceneController}. The \texttt{SceneController} calls
+\texttt{actions()} on each plant, passes the returned action sequence through a \texttt{Turtle} instance, and
+uploads the resulting geometry to pre-allocated GPU buffers. LOD tier is computed per-plant from camera
+distance at build time; tier changes also mark the scene dirty, triggering a rebuild at the next update.
+Ecosystem regeneration uses the current seed from \texttt{EnvironmentSettings}, so every rebuild from the
+same seed produces the same spatial layout.
+
+\paragraph{Plant layer.}
+Each species is a struct implementing the \texttt{Plant} trait. The L-System string is cached and only
+re-evolved when the iteration count changes or the season crosses a threshold, so grammar computation does
+not occur every frame. Seasonal behaviour, dormancy, shedding probability, leaf colouration, and flowering
+phenology, is encoded directly within the parametric production closures, which capture season-derived values
+at generate time.
+
+\paragraph{Turtle and geometry.}
+The \texttt{Turtle} struct maintains its position, an orthonormal frame (heading, normal, binormal) and a
+matrix stack for push/pop. It produces two geometry streams: \texttt{LineGeometry} for the debug skeleton and
+\texttt{MeshGeometry} for cylinder branches and leaf quads. Tropism, gravitropism, wind, voxel-grid space
+pruning, and tapered branch radii are applied per-segment during traversal.
+
+\paragraph{Renderer.}
+Two \texttt{wgpu} render pipelines are used: a line pipeline for the debug branch skeleton and a mesh
+pipeline for cylinder branches and leaf quads. The mesh pipeline accepts position, colour, normal, UV, and
+tangent vertex buffers and a 96-byte uniform block (view-projection matrix, light direction, ambient factor,
+and season colour tint). The season tint is written to the uniform buffer every frame, so seasonal colour
+changes require no geometry rebuild.
+
+% ──────────────────────────────────────────────────────────────────────────────────────────────────────────
+\section{Development}
+
+\subsection{Development Approach}
+
+An incremental, minimum viable product (MVP) strategy was used, motivated by the risk that later components
+(ecosystem placement, full seasonal L-System effects) might prove infeasible within the project timescale.
+Development proceeded in priority order, ensuring a visually functioning system existed at every stage. This
+approach mirrors the bottom-up ordering used by Deussen et al.~\cite{deussenRealisticModelingRendering1998},
+where a working single-plant renderer was established before any ecosystem-level features were attempted.
+
+\medskip
+All code is version-controlled with Git on a single main branch with frequent commits. Additionally, a nix
+flake was used to manage the projects' development environment and provide declarative, reproducible builds
+across machines~\cite{dolstraPurelyFunctionalSoftware2006, nixManual}.
+
+\subsection{Development Sprints}
+
+Development was organized into four sprints, each targeting a subset of the project deliverables from
+Chapter~\ref{chapter1}, with a defined goal and deliverabilities assessed at the end of the sprint.
+
+\subsubsection{Sprint~1 — L-System engine and 2D rendering}
+\textit{Goal:} A working L-System interpreter capable of producing correct string derivations, interpreted by
+a turtle into a 2D line drawing rendered via wgpu.
+
+\medskip
+\textit{Deliverables:}
+\begin{itemize}
+  \item The \texttt{LSystem} struct, \texttt{Symbol} trait, and \texttt{Rule} enum supporting \texttt{Normal}
+    and \texttt{Stochastic}, \texttt{ContextSensitive} and \texttt{Parametric} variants (Deliverable~2)
+  \item A 2D turtle producing \texttt{LineGeometry}
+  \item A \texttt{wgpu} pipeline capable of rendering \texttt{LineGeometry}
+\end{itemize}
+
+\subsubsection{Sprint~2 — 3D geometry and plant grammars}
+\textit{Goal:} A 3D turtle producing cylinder branches and leaf quads, with at least three distinct plant
+grammars demonstrating different grammar classes.
+
+\medskip
+\textit{Deliverables:}
+\begin{itemize}
+  \item The 3D turtle with push/pop state, branch, and leaf quad generation producing \texttt{MeshGeometry}
+  \item A \texttt{wgpu} pipeline capable of rendering \texttt{MeshGeometry} (Deliverable~1)
+  \item The \texttt{Plant} trait and \texttt{SceneController}
+  \item Three distinct plant grammars (Deliverable~3)
+\end{itemize}
+
+\subsubsection{Sprint~3 — Environmental response and GUI}
+\textit{Goal:} Phototropism, gravitropism, wind, seasonal changes and space constraints with a GUI to manage
+these parameters.
+
+\medskip
+\textit{Deliverables:}
+\begin{itemize}
+  \item Implementation of phototropism, gravitropism and wind response
+  \item Implementation of Seasonal dormancy, colouration, shedding and flowering phenology
+  \item A GUI from controlling environmental parameters (Deliverable~4)
+\end{itemize}
+
+\subsubsection{Sprint~4 — Ecosystem placement and LOD}
+\textit{Goal:} A kernel-based ecosystem placement algorithm with self-thinning and succession as well as a
+distance-based LOD system.
+
+\medskip
+\textit{Deliverables:}
+\begin{itemize}
+  \item Inhibitory, promotional, mixed, and neutral placement kernels with inverse-transform sampling
+  \item Implementation of self-thinning and succession
+  \item A five-tier LOD system with adaptive geometry budget pressure
+  \item View-frustum culling using the Gribb--Hartmann method~\cite{gribbFastExtractionViewing}
+\end{itemize}

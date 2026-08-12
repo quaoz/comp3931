@@ -1,0 +1,177 @@
+\chapter{Results, Evaluation, and Discussion}
+\label{chapter4}
+
+% ──────────────────────────────────────────────────────────────────────────────────────────────────────────
+\section{Performance Results}
+
+Performance was measured using the built-in performance logger, which records per-frame time, FPS, mesh
+triangle count, and scene rebuild duration to a CSV file for analysis. The two subsections below cover the
+primary variables under direct implementation control: LOD tier and geometry allocation strategy.
+
+\subsection{LOD Effectiveness}
+
+Table~\ref{tab:lod-perf} shows the effect of LOD tier on mesh index count, average frame time over 30 seconds
+and rebuild time for the meadow scene at year 3 with the seed set to 13. The three mesh-producing tiers
+(Near, Mid, Far) are defined in Table~\ref{tab:lod}; LOD boundaries were altered so that all plants fell into
+one tier (confirmed through the debug UI and performance logger output), frustum culling and vsync were
+disabled and the camera was set to orbit mode with auto orbit enabled, all other settings were kept as their
+defaults.
+
+\begin{table}[h]
+  \centering
+  \begin{tabular}{|l|r|r|r|}
+    \hline
+    \textbf{LOD tier} & \textbf{Mesh triangles} & \textbf{Average frame time (ms)} & \textbf{Rebuild time (ms)} \\
+    \hline
+    Near              & 5816578                 & 5.4961                           & 275.44 \\
+    Mid               & 3690514                 & 4.0616                           & 163.82 \\
+    Far               & 2197802                 & 2.8490                           & 133.22 \\
+    \hline
+  \end{tabular}
+  \caption{Impact of LOD tier on performance for the meadow scene.}
+  \label{tab:lod-perf}
+\end{table}
+
+Across the three tiers, mesh triangle count falls by a factor of 2.65 (Near to Far). GPU frame time falls by
+a factor of 1.93 over the same range, as the draw call overhead and vertex transform cost have a fixed
+component independent of triangle count. All three tiers remain well below the 16.7\,ms threshold for 60\,FPS
+interactive use, achieving 182\,FPS at Near and 351\,FPS at Far.
+
+\medskip
+Rebuild time falls by a factor of 2.07 from Near to Far, tracking the triangle-count reduction more closely
+than frame time does as rebuild time is dominated by CPU geometry generation, which scales with the amount of
+geometry produced. The rebuild costs represent a one-time per-change expense caused by switching LOD tiers.
+Rebuilds are only triggered by parameter changes, season threshold crossings, or LOD tier transitions,
+meaning that the cost is not paid every frame.
+
+\subsection{Allocation and Hash Table Optimisations}
+
+Three allocation-level optimizations were applied to the turtle geometry path to reduce per-plant overhead
+during scene rebuilds.
+
+\medskip
+First, the voxel occupancy sets use an inline FNV-1a hash function (implemented in approximately ten lines of
+Rust, with no external dependency) in place of Rust's default SipHash hasher. SipHash is designed to resist
+hash-flooding attacks, a property that is unnecessary for integer-keyed internal data
+structures~\cite{aumassonSipHashFastShortInput2012}. For \texttt{(i32,i32,i32)} keys, FNV-1a reduces lookup
+and insert cost by a factor of approximately three to five compared to the default hasher, because the hash
+computation over twelve bytes of already-uniform integer data requires only twelve XOR-multiply iterations
+rather than SipHash's more expensive key schedule~\cite{fowlerFNVNonCryptographicHash2026}.
+
+\medskip
+Second, the turtle's internal per-plant buffers (push stack, path vertices, colours, and path entries) are
+cleared and reused across plants rather than reallocated. The \texttt{reset()} method calls \texttt{clear()}
+followed by \texttt{push()} instead of constructing new \texttt{Vec} instances, preserving the heap capacity
+allocated during the previous plant's build for reuse by the next.
+
+\medskip
+Third, mesh geometry is moved out of the turtle into the plant cache via \texttt{std::mem::take} rather than
+cloned. This eliminates one full copy of six geometry vectors (vertices, normals, colours, indices, UVs,
+tangents) per plant per scene rebuild, reducing peak memory allocation during rebuilds proportionally to scene size.
+
+% ──────────────────────────────────────────────────────────────────────────────────────────────────────────
+\section{Evaluation Against Objectives}
+
+\subsection{Objective 1: L-System Interpreter}
+
+The interpreter correctly implements all seven rule variants. This is confirmed by the unit test suite
+(Section~\ref{sec:testing}), which covers the D0L algae sequence, terminal pass-through, stochastic
+probability boundaries, and all forms of context-sensitive matching including branch-skipping and
+multi-branch right-context search. Context-sensitive priority was further validated manually for the
+\textit{Mycelis} grammar (Figure~\ref{fig:mycelis}), where the acropetal signal chain depends on context
+rules firing before general rules for the same symbol.
+
+\paragraph{Limitations:}
+Grammars are defined entirely in Rust code: adding a new species requires writing a new \texttt{.rs} file,
+implementing the \texttt{Plant} trait, and recompiling. There is no runtime grammar definition language,
+which limits the system's use as an authoring tool for non-programmers.
+
+\subsection{Objective 2: Plant Grammars}
+
+Eight distinct plant grammars are implemented across four grammar classes. Plants based on grammars described
+in \textit{The Algorithmic Beauty of Plants} (\textit{Lychnis}, \textit{Mycelis}, and \textit{Capsella}) are
+visually similar to their respective figures. Other plants produce convincing plant forms with appropriate
+branching structure and leaf distribution.
+
+\paragraph{Limitations.}
+Quantitative comparison of branch angles with measured plant data has not been performed. Whilst possible,
+L-Systems are not used to generate leaves or flowers, a leaf texture is used instead.
+
+\subsection{Objective 3: Environmental Response}
+
+Phototropism, gravitropism, wind, and season response are all implemented and interactive. The season system
+demonstrates visually distinct states at spring, summer, autumn, and winter on two levels: a global colour
+tint applied per-fragment without a geometry rebuild, and per-species dormancy behaviour
+(Figure~\ref{fig:seasons}). Deciduous species (bush and tree) drop their leaves while retaining branch structure.
+Herbaceous species (wildflower, fern, mint, \textit{lychnis}, \textit{mycelis}) fade to dormancy by scaling
+the effective L-System age. The tree progressively increases leaf-cluster shedding probability. Tropism
+produces convincing branch bending toward the light source at moderate strength values.
+
+\paragraph{Limitations.}
+The environmental response is applied as a post-processing deflection of the turtle frame rather than as
+feedback into the L-System rewriting process. This means the grammar cannot respond to local environmental
+conditions (e.g.\ a bud entering shadow and aborting). A full open L-System
+implementation~\cite{mechVisualModelsPlants1996} would require the environment to be sampled at each symbol
+position during rewriting, significantly increasing implementation complexity. Phototropism is applied
+uniformly to all branches of all plants in a scene, it does not model per-branch light levels. In a real
+forest, the canopy shades lower branches, and the tree architecture adapts accordingly. Implementing
+per-branch irradiance would require either a shadow map or a simplified canopy model.
+
+\subsection{Objective 4: Interactive 3D Visualisation}
+
+The system maintains interactive frame rates across all provided scenes. The egui GUI provides real-time
+control of all parameters with immediate visual feedback (Appendix~\ref{app:gui}). The debug HUD displays
+FPS, frame time, and total index count with a rolling 128-frame bar graph. The LOD system adapts
+automatically to camera position, and the season auto-advance feature allows unattended demonstration of the
+full growth cycle.
+
+\paragraph{Limitations.}
+The renderer uses a single Lambert diffuse lighting model with no shadow casting or receiving. Plants do
+not shade each other, meaning large scenes appear uniformly lit regardless of canopy density. Implementing
+even an approximate ambient occlusion term would significantly improve visual realism at the cost of
+additional render passes. There is no anti-aliasing. At typical viewing distances branch silhouettes exhibit
+temporal aliasing as the camera moves. Adding MSAA would require configuring a multisampled render target and
+resolve pass, which was deferred as a lower-priority rendering quality concern.
+
+% ──────────────────────────────────────────────────────────────────────────────────────────────────────────
+\section{Conclusions and Future Work}
+
+\subsection{Summary of Contributions}
+
+This project has delivered a real-time procedural vegetation system in Rust with the following novel
+contributions relative to existing tools:
+
+\begin{itemize}
+  \item A single unified L-System interpreter supporting four rule classes (deterministic, stochastic,
+    parametric, and context-sensitive) in a type-safe, zero-overhead Rust implementation.
+  \item Eight botanically motivated plant grammars spanning four grammar classes, with per-branch stochastic
+    variation and age-based colour.
+  \item An integrated environmental response system combining phototropism, gravitropism, wind and a seasonal
+    cycle with adaptive rebuild scheduling. Per-species dormancy, leaf-drop, and flowering phenology are
+    encoded directly in each grammar's parametric closures and activated by the season value passed through
+    \texttt{PlantEnvironment} to \texttt{Plant::actions()}.
+  \item A kernel-based ecosystem placement system supporting multi-species communities with weighted
+    abundance, self-thinning, and ecological succession, with per-species ecological properties encoded at
+    the type level.
+  \item A five-tier LOD system (\texttt{Near}/\texttt{Mid}/\texttt{Far}/\texttt{Beyond}/\texttt{Culled}) with
+    per-tier leaf-skip probabilities, view-frustum culling via the Gribb--Hartmann method, and an adaptive
+    geometry-budget pressure mechanism that dynamically tightens LOD thresholds when assembled geometry
+    exceeds the GPU buffer limit.
+\end{itemize}
+
+\subsection{Future Work}
+
+\paragraph{Open L-Systems.}
+The most significant technical extension would be implementing full open L-System
+semantics~\cite{mechVisualModelsPlants1996}, in which the L-System queries the environment (light levels,
+occupied space) during rewriting. This would enable branch abortion in shade, root systems competing for
+nutrients, and graft compatibility modelling.
+
+\paragraph{Grammar serialization.}
+Currently, all grammars are hard-coded in Rust. A grammar definition language (similar to
+L-Py~\cite{boudonLPyLSystemSimulation2012}) would allow users to define and share new plant types without recompiling.
+
+\paragraph{Procedural bark and branch textures.}
+Branch cylinders are currently shaded with a flat vertex colour interpolated by age. Procedural or
+texture-mapped bark would substantially improve close-up visual quality without changing the grammar or
+geometry pipeline.

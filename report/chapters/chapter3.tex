@@ -1,0 +1,579 @@
+\chapter{Implementation and Validation}
+\label{chapter3}
+
+% ──────────────────────────────────────────────────────────────────────────────────────────────────────────
+\section{L-System Interpreter}
+\label{sec:interpreter}
+
+\subsection{Symbol Trait}
+
+The interpreter is built around two abstractions: the \texttt{Symbol} trait and the \texttt{Rule} enum. Any
+type that implements \texttt{Symbol} may be used as the alphabet of an L-System.
+
+\begin{verbatim}
+pub trait Symbol: PartialEq + Copy + Clone {
+    fn symbol_type(&self) -> SymbolType; // Terminal | NonTerminal
+
+    fn context(&self) -> ContextAction { // Ignore | Consider | BranchStart | BranchEnd
+        ContextAction::Consider
+    }
+}
+\end{verbatim}
+
+Only \texttt{NonTerminal} symbols are subject to rewriting; \texttt{Terminal} symbols pass through unchanged.
+This distinction avoids the need for explicit identity productions and is consistent with the standard
+L-System formulation. The \texttt{context()} method is used to determine the matching behaviour for
+context-sensitive rules, by default all symbols are considered.
+
+\subsection{Rule Variants}
+
+The \texttt{Rule} enum provides four variants covering all required grammar classes:
+
+\begin{verbatim}
+pub enum Rule<'a, S: Symbol> {
+    Normal(S, &'a [S]),
+    Stochastic(S, f32, &'a [S]),
+    ContextSensitive(S, Option<S>, Option<S>, &'a [S]),
+    Parametric(S, &'a dyn Fn(&S, &mut Vec<S>) -> bool),
+}
+\end{verbatim}
+
+The type parameter \texttt{<'a, S: Symbol>} makes each rule generic over the grammar alphabet. The Rust trait
+bound \texttt{S: Symbol} enforces at compile time that only types implementing \texttt{Symbol} may serve as
+alphabet elements. The lifetime \texttt{'a} ties the borrows to the rule~\cite{TraitLifetimeBounds}: each
+\texttt{\&'a [S]} is a reference to a caller-allocated array rather than an owned \texttt{Vec<S>},
+eliminating the need for heap allocation. This is viable because the output of a \texttt{Normal},
+\texttt{Stochastic} or \texttt{ContextSensitive} rule is fixed at grammar-construction time. The
+\texttt{Parametric} variant differs as its output is dependent on the parameters passed: its closure writes
+into a \texttt{\&mut Vec<S>} provided by the rewriting engine at runtime, avoiding a per-symbol allocation
+while still permitting computed output.
+
+\medskip
+\texttt{Normal} rules can be used for deterministic, context-free productions, they have two parameters; the
+symbol they match and the set of symbols that it is replaced with. The production $A \rightarrow AB$ would be
+modelled as \texttt{Rule::Normal(A, \&[A, B])}.
+
+\medskip
+\texttt{Stochastic} rules are similar to \texttt{Normal} rules but take an additional probability parameter
+representing the likelihood for that production to be applied. A production with a 50\% chance of being
+applied, $A[0.5] \rightarrow AB$, is denoted as \texttt{Rule::Stochastic(A, 0.5, \&[A, B])}.
+
+\medskip
+\texttt{ContextSensitive} rules take two additional parameters, the left and right context, the rule will
+only be applied when the matched symbol appears in between the left and right context. Both the left and
+right parameters are optional allowing this rule to model 1L-Systems and 2L-Systems. The production $B < A >
+C \rightarrow BC$ is written as \texttt{Rule::ContextSensitive(A, Some(B), Some(C), \&[B, C])}. Left context
+is primarily used to model acropetal signals, signals which travel from the base of the plant up, because of
+this if a branch is encountered whilst checking for left context it will be skipped. Right context models
+basipetal signals, those which travel down the plant, and as a result must check every branch after the symbol.
+
+\medskip
+\texttt{Parametric} rules carry a trait object reference (\texttt{\&'a dyn}) for a closure (\texttt{Fn(..) ->
+bool}) which takes a shared reference to the matched symbol (\texttt{\&S}) and a mutable reference to a
+vector (\texttt{\&mut Vec<S>}) as its parameters and returns a boolean indicating whether it matched the
+symbol. As rules can be created dynamically the closure they reference cannot be known until runtime. Trait
+objects allow for the late binding of methods where, as described in the Rust Reference~\cite{TraitObjectTypes}:
+
+\begin{displayquote}
+  Calling a method on a trait object results in virtual dispatch at runtime: that is, a function pointer is
+  loaded from the trait object vtable and invoked indirectly
+\end{displayquote}
+
+The closure receives a shared reference to the matched symbol (allowing it to read inline parameters) and
+appends its production into an existing \texttt{Vec}. For example the production $I(l): l < 10 \rightarrow
+I(l * k)$, which models an internode \texttt{I(l)} that grows by factor~$k$ until it reaches $10$ is written:
+
+\begin{verbatim}
+Rule::Parametric(I(0.0), &|s, out| {
+    if let &I(l) = s && l < 10 {
+        out.push(I(l * k));
+        true
+    } else {
+        false
+    }
+})
+\end{verbatim}
+
+When symbols are matched to rules \texttt{std::mem::discriminant} is used, this means that the rule head
+\texttt{I(0.0)} will match any \texttt{I(..)} regardless of the parameters value.~\footnote{Matching
+  behaviour technically depends on the implementation of the \texttt{PartialEq} trait for an object
+  implementing \texttt{Symbol} which may vary depending on the underlying type, however
+\texttt{std::mem::discriminant} is used by all grammars in this project}
+
+\subsection{L-System}
+
+From these abstractions the \texttt{LSystem} struct is defined as:
+
+\begin{verbatim}
+pub struct LSystem<'a, S: Symbol> {
+    state: Vec<S>,
+    rules: Vec<Rule<'a, S>>,
+}
+\end{verbatim}
+
+\texttt{LSystem::new(axiom, rules)} takes the axiom as a \texttt{\&[S]} slice and the rules as a
+\texttt{Vec<Rule>}. \texttt{step()} performs one rewriting pass: each symbol is matched against the rule
+list, with context-sensitive rules taking priority, the first matching rule appends its production to the
+output; if no rule matches, the symbol is copied unchanged. \texttt{evolve(n)} calls \texttt{step} $n$ times
+and \texttt{current()} returns an immutable slice of the current string.
+
+\subsection{Seeded RNG}
+
+Stochastic rules use a thread-local \texttt{SmallRng} from the \texttt{rand} crate, seeded before each scene
+build from the scene's \texttt{seed} field. This guarantees that a given seed always produces the same plant
+arrangement and geometry, while different seeds produce meaningfully different visual results. The RNG is
+also used in ecosystem placement, ensuring that the full scene is reproducible from a single seed.
+
+% ──────────────────────────────────────────────────────────────────────────────────────────────────────────
+\section{Turtle Graphics}
+\label{sec:turtle}
+
+\subsection{3D Turtle State}
+
+The turtle maintains two unit vectors: \texttt{heading} ($\mathbf{H}$), the direction of travel, and
+\texttt{normal} ($\mathbf{N}$), the up-vector of the current frame. The binormal $\mathbf{L} = \mathbf{H}
+\times \mathbf{N}$ is computed on demand to complete the right-handed orthonormal frame. Position is tracked
+as the most recent point in an internal path buffer. \texttt{Roll}, \texttt{Turn}, and \texttt{Pitch} actions
+rotate the frame about $\mathbf{H}$, $\mathbf{L}$, and $\mathbf{N}$ respectively. \texttt{Push} saves the
+full per-branch state (position, heading, normal and tracking values for environmental variation) to a
+\texttt{StackEntry} on an internal stack. \texttt{Pop} restores the saved state.
+
+\subsection{Branch Geometry}
+
+A branch step (\texttt{Action::Branch(length, radius)}) appends a cylinder to the mesh. The cylinder is
+generated by sweeping a circle of \texttt{lod\_segments} vertices along the current heading direction for
+\texttt{length} units. Branch taper is applied by linearly scaling the radius from base to tip by the
+\texttt{taper} parameter. UV coordinates are set to the sentinel value \texttt{[-1, -1]} to distinguish
+branch geometry from leaf geometry in the fragment shader, where it suppresses the leaf oval mask.
+
+\subsection{Leaf Geometry}
+
+A leaf step (\texttt{Action::Leaf(width, height)}) appends a planar quad attached at the current turtle
+position, oriented perpendicular to the current heading. The leaf texture is a $3 \times 3$ atlas of nine
+distinct leaf variants. Each leaf quad samples a randomly selected cell from the atlas: a random integer $c
+\in [0, 8]$ determines the column ($c \bmod 3$) and row ($\lfloor c / 3 \rfloor$), and the UV corners are
+mapped to the corresponding $\frac{1}{3} \times \frac{1}{3}$ sub-region. Both the front and back faces use
+the same atlas cell. This produces visual variety across leaves of the same species without additional
+geometry or per-leaf parameters. In the fragment shader, leaf fragments are identified by a non-negative UV
+$x$ coordinate; an opacity texture is sampled at the leaf UV, and fragments with opacity below 0.1 are
+discarded, producing a per-pixel alpha cutout that trims the quad to the shape of each leaf variant.
+
+\subsection{Cut Symbol}
+
+The \texttt{Cut} action terminates the current branch by skipping all subsequent actions up to the matching
+\texttt{]}~\cite{prusinkiewiczAlgorithmicBeautyPlants1990}. This is implemented in \texttt{do\_actions()} by
+tracking bracket depth separately from the turtle stack: when \texttt{Cut} is encountered inside a
+\texttt{[...]} block, a \texttt{cut\_at} depth counter is set, and all subsequent \texttt{Push}/\texttt{Pop}
+adjust only the depth counter (not the stack) until the matching depth is reached and state is restored. This
+avoids corrupting the turtle stack while correctly implementing the cut semantics.
+
+\subsection{Space Pruning}
+
+To prevent branches of one plant from occupying the same region of space as already existing plants, the
+turtle implements a voxel-grid occupancy check. The scene volume is split into axis-aligned cells of a
+configurable size (\texttt{occupancy\_cell\_size}); each cell is identified by an integer $(x, y, z)$ tuple.
+
+\medskip
+Two separate hash sets track occupancy: \texttt{occupancy\_grid} holds cells recorded by fully built plants
+and is read (but never written) while the current plant is being built; \texttt{current\_plant\_marks} holds
+cells marked during the current plant's build and is written but never read during that same build. This
+ensures that intra-plant branches do not prune each other, only branches that would enter a region already
+claimed by a \emph{prior} plant are cut. After each plant is built, \texttt{reset()} flushes
+\texttt{current\_plant\_marks} into \texttt{occupancy\_grid} so that subsequent plants see the accumulated
+footprint. At the start of each full scene rebuild, \texttt{clear\_occupancy()} empties both sets. When
+marking and checking cells every cell within the branches' radius from the base to tip is evaluated.
+
+\medskip
+Both hash sets use an FNV-1a hasher implementation in place of Rust's default SipHash. The hash-flooding
+resistance of SipHash is unnecessary for keys that are already-uniform integers under internal control. For
+the \texttt{(i32, i32, i32)} integer keys the simpler XOR-multiply hash reduces lookup and insert cost
+significantly~\cite{fowlerFNVNonCryptographicHash2026,aumassonSipHashFastShortInput2012}.
+
+\subsection{Environmental Deflections}
+
+Six per-step deflections are applied during branch traversal:
+
+\begin{itemize}
+\item \textbf{Phototropism}: at each \texttt{Branch} step, the turtle frame is rotated toward the configured
+  light direction by $\Delta\theta = k_\text{photo} \cdot \sin\theta$, where $\theta$ is the current angle
+  between the heading and the light direction and $k_\text{photo}$ is the user-configured strength.
+\item \textbf{Gravitropism}: the same formula applied toward the $+Y$ axis with a separate strength
+  $k_\text{grav}$, modelling negative gravitropism (upward shoot growth against gravity).
+\item \textbf{Wind}: a perturbation in the configured wind direction, scaled by \texttt{wind\_strength} and
+  jittered by \texttt{wind\_turbulence} using the scene RNG, is applied as a static heading offset baked at
+  geometry build time.
+\item \textbf{Proprioception}: a simplified approximation of the Bastien et al.\ autocorrelation
+  model~\cite{bastienUnifiedModelShoot2015}. A curvature accumulator increments with each deflection and
+  decays at rate $\gamma$ per step, modelling the plant's tendency to straighten after bending. The
+  accumulator is reset to zero on each \texttt{Push}, so proprioception acts independently within each
+  branch.
+\item \textbf{Heading drift}: a correlated stochastic perturbation applied at each \texttt{Branch} step. The
+  drift vector is incremented by noise scaled by \texttt{variation\_noise\_strength} and decayed by
+  \texttt{variation\_decay\_rate}, producing the continuous meandering of real branch paths with memory
+  across consecutive steps (in contrast to independent per-step jitter).
+\item \textbf{Per-branch colour drift}: a similar drift process is applied to the RGB colour offset, producing
+  natural colour variation across branches of the same plant without any grammar-level colour rules. Both
+  drift processes are reset on \texttt{Push}.
+\end{itemize}
+
+% ──────────────────────────────────────────────────────────────────────────────────────────────────────────
+\section{Plant Grammars}
+\label{sec:grammars}
+
+Eight species were implemented in total, descriptions of any unique symbols and parameters as well as figures
+and full grammars are available in Appendix \ref{app:plants}.
+
+\subsection{Fern}
+
+The fern grammar builds a crown-based frond structure (Appendix~\ref{app:fern}). The crown symbol
+$\mathrm{Cy}(e, \delta)$ waits $e$
+steps then expands radially into three fronds at $120°$ intervals before spawning a deeper crown layer. Each
+frond grows through $\mathrm{L}(a, d, \delta)$ nodes which branch once mature ($a \ge a_b$), provided there
+is room to grow in both node distance and depth. The droop angle $\varphi$ applied at each branch node
+increases with depth and node distance, creating the characteristic arching frond shape. Branch segments
+$\mathrm{Br}(a, \delta)$ age in place, scaling the rendered geometry by age and depth. The growth and
+structure of the fronds is based on Campbell's approach~\cite{campbellDescribingShapesFern1996}.
+
+\subsection{Mint}
+
+Mint has pairs of opposite leaves at each internode, with each successive pair rotated $90°$
+(Appendix~\ref{app:mint}). The apex $A(t)$ increments a node counter and emits two internode leaf-pair units
+each step. Every third node ($t \equiv 2 \pmod{3}$) two opposite sub-stems $B$ are inserted, each of which
+repeats the leaf pattern. Growth terminates once the node count reaches $n_A$, after which further apex
+rewrites omit the continuation.
+
+\subsection{Wildflower}
+
+The wildflower uses a stochastic branching grammar (Appendix~\ref{app:wildflower}). The plant axiom $P$ emits
+a single apex $A(r)$ with a random starting jitter seed. Each step the apex extends three stem segments, spawns
+a pair of lateral branches via $I(40)$, and continues with increased jitter $A(a{+}1)$. $I(a)$ immediately
+resolves into two opposite branch tips $Q$ at ${\pm}a°$, where each $Q$ either extends stochastically ($p=0.5$)
+or terminates by emitting a further $I(r)$ sub-branch. Flowers are appended to each apex step when in season.
+
+\subsection{\textit{Lychnis}}
+
+The \textit{Lychnis} grammar is based on the grammar described on Figure 3.14 in \textit{The Algorithmic
+Beauty of Plants}~\cite{prusinkiewiczAlgorithmicBeautyPlants1990} (Appendix~\ref{app:lychnis}). It models a
+campion with opposite leaves and a terminal flower. The apex $\mathrm{A}(d)$ waits $d_{\text{delay}}$ steps
+before expanding, producing two opposite leaf pairs and two lateral apices at staggered delays to create
+asynchronous branching. A terminal internode $\mathrm{I}(10)$ follows, emitting a flower $\mathrm{K}(0)$ only
+when the seasonal parameter $\sigma$ falls within the bloom window. Leaves and flowers grow incrementally via
+their size counters and are rendered scaled to $s_{\max}$.
+
+\subsection{\textit{Mycelis}}
+
+Adapted from L-System 3.3 in \textit{The Algorithmic Beauty of
+Plants}~\cite{prusinkiewiczAlgorithmicBeautyPlants1990} (Appendix~\ref{app:mycelis}), the model for
+\textit{Mycelis} is one of the more complex L-Systems. It makes heavy use of context-sensitive rules to send
+signals throughout the plant to trigger developmental changes. Acropetal flowering is driven by a basipetal
+$S$ signal that propagates through the main axis via $I(t)\!\to\!S$, triggering an apex $A$ to flower when
+$S$ or $V$ appears to its left. Lateral buds $G$ are activated once per internode by the context signal $T$,
+growing into a new internode--apex pair. The signal chain $S\!\to\!T\!\to\!W\!\to\!V$ advances one step each
+generation, ensuring acropetal ordering. This progression is visible in Figure~\ref{fig:mycelis} where
+branches and flowers propagate down the plant.
+
+\subsection{\textit{Capsella}}
+
+The \textit{Capsella} grammar is derived from Figure 3.5 in \textit{The Algorithmic Beauty of
+Plants}~\cite{prusinkiewiczAlgorithmicBeautyPlants1990} (Appendix~\ref{app:capsella}). The vegetative apex
+$a(t)$ counts down from $n_{\mathrm{veg}}$, producing leaves with golden-angle phyllotaxis on each step,
+before transitioning to the flowering apex $A$.
+
+\subsection{Tree}
+
+The tree uses a ternary branching grammar with parametric internode growth and deciduous leaf shedding
+(Appendix~\ref{app:tree}). Two apex symbols share the same branching template: the trunk apex $T$ extends
+three internodes before the branch node, while the branch apex $X$ extends one. Both then emit three lateral
+branches at roll offsets $-\beta$, $-4\beta$, and $-9\beta$, each leaned by $-\beta$ and followed by a leaf
+cluster $G$. Leaf clusters render four differently oriented leaves; each leaf is independently dropped with
+a season-dependent probability $p_{\mathrm{shed}}$ once the plant exceeds a minimum age. Bark colour
+interpolates from a young to old value as the plant ages and leaf colour blends to amber-gold before shedding.
+
+\subsection{Bush}
+
+The bush uses the same three-branch template as the tree but with simpler geometry (Appendix~\ref{app:bush}):
+all internodes are a fixed length (no parametric growth), leaf quads are placed inline at branch tips rather
+than in a separate cluster symbol, and seasonal variation is handled by scaling leaf dimensions rather than
+stochastic shedding. The trunk symbol $T$ extends one segment before delegating to the first-level brancher
+$X$; the recursive sub-branch symbol $N$ extends two segments and interleaves leaf pairs at each sub-node,
+producing a denser rounded crown.
+
+% ──────────────────────────────────────────────────────────────────────────────────────────────────────────
+\section{Environmental Response}
+
+The per-branch deflections (phototropism, gravitropism, wind, proprioception, and OU drift) described in
+Section~\ref{sec:turtle} are applied at the geometry level by the turtle interpreter. Higher-level
+environmental response --- seasonal dormancy, leaf shedding, flowering phenology, and colour change --- is
+encoded directly in the parametric production closures of each plant grammar, making it transparent to the
+rewriting engine.
+
+\subsection{Seasons}
+\label{sec:seasons}
+
+\begin{figure}[h]
+\centering
+\resizebox{\textwidth}{!}{\includegraphics{seasons}}
+\caption{Mature forest scene throughout the year, clockwise from top left: spring, summer, autumn, winter.}
+\label{fig:seasons}
+\end{figure}
+
+The season is a single \texttt{f32} value between $0$ and $1$: 0 corresponds to mid-winter, 0.25 to spring,
+0.5 to summer, and 0.75 to autumn. Herbaceous perennial species implement a dormancy model in which the
+effective L-System age is reduced by a dormancy factor $d(\mathit{season})$:
+
+\begin{equation}
+\mathit{age\_eff} = \bigl\lfloor \mathit{age} \cdot (1 - d) \bigr\rceil
+\end{equation}
+
+The dormancy factor $d$ is computed by a smooth-step curve that ramps from zero at summer to a
+species-specific maximum at peak winter, plateaus through mid-winter, then recovers to zero by spring.
+Scaling the age rather than individual rule parameters keeps the grammars independent of season.
+
+\medskip
+Autumn leaf colouration is implemented as a linear interpolation between the summer leaf colour and a
+species-specific dormant colour. The interpolated colour is computed once inside \texttt{generate()} and
+captured by the parametric closure, requiring no per-frame recomputation.
+
+\medskip
+Flowering phenology is implemented by gating the presence of flower symbols on a \texttt{show\_flower}
+boolean computed from the current season. For species that retain seed heads after flowering
+(e.g.\ wildflower), a separate \texttt{show\_seed} gate models the phenological transition from flower to
+seed with a reduced symbol size.
+
+\medskip
+The global season tint, interpolated from white at summer through warm amber in autumn to cool grey in
+winter, is written to the uniform buffer on every frame via \texttt{season\_tint()} without triggering a
+geometry rebuild, enabling smooth real-time colour blending as the season slider is adjusted.
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Ecosystem Placement}
+\label{sec:ecosystem}
+
+\subsection{Kernel-Based Placement}
+
+Plant positions are generated by sampling from a 2D probability density function (PDF) defined over a $32
+\times 32$ grid spanning the scene area. The grid is initialized with uniform probability. Each time a plant
+is placed, a deformation kernel centred on that plant's position updates the PDF
+~\cite{laneGeneratingSpatialDistributions2002}:
+
+\begin{itemize}
+\item \textbf{Inhibitory}: a Gaussian bell curve reduces the probability near the placed plant, modelling
+  competitive exclusion.
+\item \textbf{Promotional}: the bell curve increases probability, modelling facilitation (e.g.\ nurse plants).
+\item \textbf{Mixed}: a negative bell at close range combined with a weak positive lobe at medium range.
+\item \textbf{Neutral}: no kernel applied; produces a uniform random distribution as a baseline.
+\end{itemize}
+
+Species are sampled from a user-configured weighted list. The weight determines relative abundance: equal
+weights produce a mixed community, skewed weights produce a dominant species with subordinates.
+
+\subsection{Self-Thinning}
+
+After placement, optional self-thinning iteratively removes the smaller plant from any pair closer than the
+configured thinning radius. The algorithm continues until no overlapping pairs remain, producing an
+overdispersed (regular) distribution characteristic of mature single-species
+stands~\cite{laneGeneratingSpatialDistributions2002}.
+
+\subsection{Succession}
+
+The optional succession algorithm alternates between growth steps, increasing each plant's radius increases
+by its species' intrinsic growth rate, and competition steps, removing the plant with lower shade tolerance
+from overlapping pairs. Each surviving plant has a 25\% chance of producing an offspring nearby, inheriting
+the parent's species. This models the succession of pioneer communities (fast-growing, low shade tolerance)
+toward climax communities (slow-growing, high shade tolerance)~\cite{laneGeneratingSpatialDistributions2002}.
+Shade tolerance and growth rate are intrinsic properties of each \texttt{PlantType} rather than
+user-adjustable parameters, reflecting their biological basis.
+
+% ──────────────────────────────────────────────────────────────────────────────────────────────────────────
+\section{Level of Detail}
+\label{sec:lod}
+
+Each plant is assigned an LOD tier based on its distance from the camera:
+
+\begin{table}[h]
+\centering
+\begin{tabular}{|l|l|l|l|}
+  \hline
+  \textbf{Tier}   & \textbf{Distance} & \textbf{Rendering} \\
+  \hline
+  \texttt{Near}   & $<80$ m           & 8 cylinder segments, all branches, all leaves \\
+  \texttt{Mid}    & $80$--$160$ m     & 5 cylinder segments, all branches, reduced leaf density \\
+  \texttt{Far}    & $160$--$300$ m    & 3 cylinder segments, $r \geq 0.005$ only, reduced leaf density \\
+  \texttt{Beyond} & $>300$ m          & Mesh skipped; line skeleton only, no leaves \\
+  \texttt{Culled} & Outside frustum   & Nothing rendered \\
+  \hline
+\end{tabular}
+\caption{LOD tier thresholds (default values; user-adjustable).}
+\label{tab:lod}
+\end{table}
+
+\subsection{Leaf-Skip Probability}
+
+Each LOD tier carries a configurable \emph{leaf-skip probability}: \texttt{leaf\_skip\_near},
+\texttt{leaf\_skip\_mid}, and \texttt{leaf\_skip\_far} in \texttt{LodSettings}. At each
+\texttt{Action::Leaf} step the turtle draws a uniform random number and skips the quad if it is below
+the skip probability for the tier containing it. \texttt{Beyond} and \texttt{Culled} plants always skip
+their leaves. Using a fixed limit and skipping leaves once the limit is reached results in an obvious and
+unnatural pattern with some regions being bare whilst their neighbours remain untouched. Additionally,
+escalating the probability with the LOD tiers results in the most aggressive culling taking place in the
+least visible areas.
+
+\subsection{Frustum Culling}
+
+Plants entirely outside the camera view frustum are assigned the \texttt{Culled} tier and contribute no
+geometry. The view frustum is extracted from the view-projection matrix using the Gribb--Hartmann
+method~\cite{gribbFastExtractionViewing}, yielding six half-space planes. Each plant is then tested as a
+bounding sphere of configurable radius \texttt{cull\_radius}. Plants are only culled if their sphere lies
+fully outside at least one plane.
+
+\subsection{Adaptive LOD Pressure}
+
+A \texttt{lod\_pressure} multiplier between $0.1$ and $1.0$ is used to scale the LOD distance thresholds and
+increase the leaf-skip probabilities. When the assembled scene geometry exceeds the GPU buffer limit the
+multiplier is reduced causing the LOD boundaries to shrink and the leaf-skip probabilities to grow,
+$p \leftarrow \max(0.1,\; p \times 0.75)$. Once the buffer fill ratio falls bellow 65\% the pressure multiplier
+is gradually restored: $p \leftarrow \min(1.0,\; p / 0.9)$.
+
+A change in \texttt{lod\_pressure} triggers a full rebuild so that the tightened thresholds take effect
+on the next frame. Recovery is slower than degradation and requires significant headroom in order to prevent
+oscillation between overflow and fit states. The current pressure value is displayed in the debug HUD when
+it falls below 1.0.
+
+% ──────────────────────────────────────────────────────────────────────────────────────────────────────────
+\section{Rendering Pipeline}
+
+\subsection{Geometry Buffers}
+
+The mesh pipeline uses four per-vertex buffers: position (\texttt{Vec3}), colour (\texttt{Vec3}), normal
+(\texttt{Vec3}), and UV (\texttt{[f32; 2]}). All plants in a scene are combined into a single set of buffers
+before upload. Line geometry is stored in a separate buffer pair. The uniform block is 96 bytes: 64 bytes
+for the 4$\times$4 view-projection matrix, 12 bytes for the light direction, 4 bytes for the ambient factor,
+12 bytes for the season tint colour, and 4 bytes of padding to satisfy WGSL alignment requirements.
+
+\subsection{Shaders}
+\label{sec:shaders}
+
+The \textbf{mesh shader} (\texttt{mesh.wgsl}) implements Lambert diffuse lighting with tangent-space normal
+mapping for leaves. In the vertex stage the clip position is computed by applying the view-projection matrix
+and colour, world normal, UV, and tangent are passed through as interpolants. In the fragment stage:
+
+\begin{enumerate}
+\item The UV sentinel ($\mathit{uv}.x < 0$) distinguishes branch faces from leaf faces.
+\item For leaf fragments, a colour texture, normal map, and opacity texture are sampled from the leaf atlas.
+  Fragments with opacity below 0.1 are discarded, producing per-pixel cutout silhouettes.
+\item The tangent-space normal is decoded from $[0,1]^3$ to $[-1,1]^3$ and transformed to world space using a
+  Gram--Schmidt re-orthogonalised tangent frame ($T' = \text{normalise}(T - (T \cdot N)N)$, $B = N \times T'$).
+\item Lambert diffuse is computed as $\max(\mathbf{n} \cdot \mathbf{L}_\mathit{dir},\ 0)$ and combined with
+  the ambient factor: $\mathit{lighting} = \mathit{ambient} + (1 - \mathit{ambient}) \cdot \mathit{diffuse}$.
+\item The final colour is $\mathit{base\_colour} \times \mathit{season\_tint} \times \mathit{lighting}$,
+  where $\mathit{base\_colour}$ is the texture colour modulated by vertex colour for leaves, or the vertex
+  colour alone for branches.
+\end{enumerate}
+
+The \textbf{line shader} (\texttt{lines.wgsl}) is a minimal pass-through: it transforms position by the
+view-projection matrix and outputs the interpolated vertex colour unchanged. The season tint is not applied
+to line geometry.
+
+% ──────────────────────────────────────────────────────────────────────────────────────────────────────────
+\section{Testing and Validation}
+\label{sec:testing}
+
+\subsection{Unit Tests}
+
+The project includes a suite of unit tests across five modules.
+
+\subsubsection{L-System interpreter}
+The classical D0L algae grammar ($A \to AB$, $B \to A$) is verified to produce the correct Fibonacci string
+sequence across the first eight generations. Terminal symbol pass-through is confirmed, as is the distinction
+between symbols without rules (which copy unchanged) and those with rules (which rewrite). Stochastic rules
+are tested at probabilities 0 and 1, and at probability 0 with a Normal fallback rule to verify the fallback
+chain. Context-sensitive matching is covered in depth: left-only and right-only contexts, failure at the
+string boundary, failure when the neighbour has the wrong identity, correct skipping of
+\texttt{Ignore}-marked symbols, correct skipping of bracketed sub-expressions during left-context traversal,
+right-context search across multiple branches. Parametric rules are tested for reading inline symbol values
+and for matching by discriminant regardless of parameter value; an \texttt{Ignore}-typed parametric symbol is
+confirmed not to satisfy a context requirement. Priority ordering is verified: context-sensitive rules fire
+before parametric rules and before stochastic rules for the same symbol, and a normal fallback fires when
+context goes unmatched.
+
+\subsubsection{Turtle graphics}
+Geometry generation is tested for both branch and leaf primitives: a \texttt{Branch} action with 8 segments
+produces 16 vertices and 48 indices; with 4 segments it produces 8 vertices and 24 indices; with 0 segments
+or a radius below the minimum-radius threshold no mesh is generated. A \texttt{Leaf} action produces a
+double-sided quad (8 vertices, 12 indices), and multiple leaves accumulate correctly.
+
+\medskip
+Orientation is verified for all three rotation axes: \texttt{Turn} rotates the heading around the normal,
+\texttt{Roll} changes only the normal (leaving the heading unaffected), and \texttt{Pitch} tilts both vectors
+around the binormal. Scale is confirmed to multiply travel distance proportionally.
+
+\medskip
+State management tests verify that a single \texttt{Push}/\texttt{Pop} restores position and heading after
+branching, and that depth-two nesting fully restores the outer frame on both pops. The \texttt{Cut} symbol is
+tested inside a branch block (geometry is skipped), at depth zero (ignored), and spanning only the directly
+enclosing bracket (geometry after the closing bracket still executes). The leaf-skip probability is confirmed
+to suppress all leaf geometry when set to 1.0.
+
+\medskip
+Space pruning tests cover: intra-plant branches never blocking each other (marks are in a separate set not
+checked during the same build); inter-plant blocking after \texttt{reset()} flushes marks into the shared
+grid; mid-segment overlap detection (a branch whose \emph{tip} lands in a clear cell is still cut if its path
+crosses an occupied cell); radius-based volumetric expansion blocking a cylinder that overlaps the marked
+region without sharing the centre-line cell; and well-separated branches not being pruned. The
+disabled-pruning case confirms all branches accumulate when the feature is off.
+
+\medskip
+Geometry combination tests confirm that \texttt{combine\_line\_geometries} and
+\texttt{combine\_mesh\_geometries} correctly offset indices across multiple geometries and that
+\texttt{mesh\_index\_count} matches the accumulated index buffer length.
+
+\subsubsection{Season utilities}
+Tests verify \texttt{season\_name} across all four quadrants (including wrap-around and negative inputs);
+\texttt{season\_tint} returning white at summer and the configured winter tint at winter, with continuity
+across the summer boundary; and \texttt{season\_needs\_rebuild} returning true across a threshold boundary
+and false within the same bucket. Generation counter tests confirm that \texttt{mark\_dirty()} increments the
+counter and that initial equality with \texttt{u64::MAX} forces the first-frame rebuild. \texttt{PlantType}
+property tests verify that \texttt{shade\_tolerance} is in \texttt{[0, 1]} and \texttt{growth\_rate} is
+positive for all nine species.
+
+\subsubsection{Ecosystem placement}
+Kernel helper functions are tested at boundary values and for monotonicity. The \texttt{mixed\_kappa} kernel
+is verified to be negative at the origin (inhibitory inner lobe), to switch sign at the inner-to-outer
+boundary ($r = 0.4$), and to decay to near zero at the outer edge. The generator is tested for: empty species
+list returning no plants; zero plant count returning no plants; correct plant count when species and count
+are given; seed reproducibility (same seed produces identical positions and types); different seeds producing
+different arrangements; all generated positions lying within the configured area bounds; species weights
+being respected; and all plant instances being placed at $y = 0$. The \texttt{self\_thinning} function is
+unit-tested directly for edge cases: an empty input remaining empty; a single plant being unchanged; two
+non-overlapping plants both surviving; and an overlapping pair retaining only the plant with the larger radius.
+
+\subsubsection{Plant trait and utilities}
+The \texttt{dormancy\_factor} function is tested across the full seasonal cycle: zero dormancy before onset,
+the smooth-step ramp at the onset and recovery midpoints, the plateau at peak winter, wrap-around at season
+1.0, and the effect of a positive phase offset shifting onset earlier. The \texttt{lerp\_bark\_colour}
+function is tested at age zero, at \texttt{max\_age}, at the midpoint, and clamped beyond \texttt{max\_age}.
+
+\medskip
+\texttt{PlantInstance} construction is tested for correct field assignment via \texttt{with\_transform}, and
+preservation of \texttt{delay\_years} across transform calls. Cloning is confirmed to copy all fields
+including position, scale, rotation, delay, and plant type.
+
+\medskip
+Smoke tests confirm that all nine plant types produce non-empty action sequences at iteration 0 and iteration
+1. Additional tests verify that \texttt{set\_iteration} with the same value does not change the action count
+and that \texttt{years\_per\_iteration} and \texttt{shade\_tolerance} are within their valid ranges.
+
+\subsection{Visual Validation}
+
+\begin{itemize}
+\item \textit{Mycelis}: the flowering state propagates acropetally (from tip to base) as age increases
+  (Figure~\ref{fig:mycelis}).
+\item \textit{Capsella}: lateral branches appear at every other node with alternating roll offsets
+  (Figure~\ref{fig:capsella}).
+\item Tree: no two instances of the same tree grammar at the same age are geometrically identical due to
+  per-branch roll jitter, confirming that the stochastic variation is working as intended.
+\item Cut symbol: at sufficient age, a fraction of leaf clusters in the tree are absent, and the associated
+  branches terminate at the push point rather than continuing to the leaf.
+\item Seeded reproducibility: in addition to the unit tests, changing and restoring the seed was visually
+  confirmed to restore the previous state.
+\end{itemize}
